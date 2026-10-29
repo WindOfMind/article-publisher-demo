@@ -1,11 +1,11 @@
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
-import { metrics, resetMetrics } from './activities';
-import * as activities from './activities';
-import { mockRateLimiter } from './services/mockRateLimiter';
-import { mockS3 } from './services/mockS3';
-import type { ArticleWorkflowInput } from './workflows';
-import { articleWorkflow } from './workflows';
+import { metrics, resetMetrics } from '../src/activities';
+import * as activities from '../src/activities';
+import { mockRateLimiter } from '../src/services/mockRateLimiter';
+import { mockS3 } from '../src/services/mockS3';
+import type { ArticleWorkflowInput } from '../src/workflows';
+import { articleWorkflow } from '../src/workflows';
 
 const TASK_QUEUE = 'article-publisher-poc';
 const BATCH_SIZE = 10;
@@ -37,7 +37,7 @@ async function createWorker(
   return Worker.create({
     connection: env.nativeConnection,
     taskQueue: TASK_QUEUE,
-    workflowsPath: require.resolve('./workflows'),
+    workflowsPath: require.resolve('../src/workflows'),
     activities,
     // Brief grace window so in-flight uploads see cancellation (OOM / restart).
     // Activities that ignore cancel would otherwise drain to completion.

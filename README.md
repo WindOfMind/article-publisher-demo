@@ -31,7 +31,8 @@ src/
     metrics.ts           # llmCalls / imageCalls / cmsUploads / cmsPublishes
   workflows/
     articleWorkflow.ts   # Orchestration + cooperative rate-limit retry
-  testHarness.ts         # Crash / recovery harness
+test/
+  fullFlow.integration.test.ts  # Crash / recovery harness
 ```
 
 ## Prerequisites
@@ -50,4 +51,4 @@ npm test    # tsc + crash harness
 
 ## Crash harness
 
-`src/testHarness.ts` proves durability and zero duplicate payment.
+`test/fullFlow.integration.test.ts` proves durability and zero duplicate payment.

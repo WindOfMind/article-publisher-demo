@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Self-contained PoC for an SEO article publishing pipeline using Temporal",
   "private": true,
-  "main": "dist/testHarness.js",
+  "main": "dist/test/fullFlow.integration.test.js",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node dist/testHarness.js",
+    "test": "npm run build && node dist/test/fullFlow.integration.test.js",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
