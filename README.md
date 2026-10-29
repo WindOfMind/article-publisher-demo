@@ -2,24 +2,40 @@
 
 Self-contained Temporal PoC for an SEO article publishing pipeline. Runs entirely locally via `@temporalio/testing` — no Redis, Postgres, or real S3 required.
 
-Diagram: https://excalidraw.com/#json=1czBNeuUHZUpKTX6Qfkd6,47UoavjMlSc1LzmMvdT-vA
+Diagram: https://excalidraw.com/#json=BvfLeXX9qyqCkJ7rWQAcg,PKqk1F-vFp02OC4tAfLekA
 
 ## Pipeline
 
 ```
-Article -> Text (LLM) ∥ Image → CMS Media Upload → CMS Publish
+Article (platforms[]) -> Text (LLM) ∥ Image → per platform: Media Upload → Publish
 ```
 
-1. **generateTextActivity** / **generateImageActivity** — run in parallel. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: mock render with heartbeats; stores WebP in Mock S3; returns `imageS3Uri`.
-2. **uploadCmsMediaActivity** — fetches image from Mock S3; returns `cmsMediaId`.
-3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants). On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries.
+1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: mock render with heartbeats; stores WebP in Mock S3; returns `imageS3Uri`.
+2. **uploadCmsMediaActivity** — for each platform in the request/config, fetches image from Mock S3 and uploads via that platform's adaptor; returns `cmsMediaId`.
+3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants on that platform). Publishes via the same adaptor. On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries.
 
-Large payloads never travel through Temporal activity return values — only S3 URIs and CMS IDs do.
+The same generated content is reused across every target platform. Large payloads never travel through Temporal activity return values — only S3 URIs and CMS IDs do.
+
+## Platforms
+
+Each article request lists one or more `platforms`. Adaptors implement `uploadMedia` + `publishPost`:
+
+| Platform  | Adaptor                | Live URL shape                                  |
+| --------- | ---------------------- | ----------------------------------------------- |
+| `shopify` | `createShopifyAdapter` | `https://{tenant}.myshopify.com/blogs/news/...` |
+| `wix`     | `createWixAdapter`     | `https://{tenant}.wixsite.com/blog/...`         |
+
+Register new platforms in `src/platforms/registry.ts`.
 
 ## Layout
 
 ```
 src/
+  platforms/
+    types.ts             # PlatformId, PlatformAdapter
+    shopifyAdapter.ts    # Mock Shopify blog adaptor
+    wixAdapter.ts        # Mock Wix blog adaptor
+    registry.ts          # Lookup adaptor by platform
   services/
     articleService.ts    # Control layer: start articleWorkflow per tenant
     mockS3.ts            # In-memory Map store (claim-check)
@@ -62,8 +78,10 @@ npm run build
 npm run publish:api   # POST http://localhost:3000/tenants/:tenantId/articles
 ```
 
-Body: `{ "articleId": "article-01", "topic": "SEO Topic 1" }` → `202` `{ workflowId, runId }`.
+Body: `{ "articleId": "article-01", "topic": "SEO Topic 1", "platforms": ["shopify", "wix"] }` → `202` `{ workflowId, runId }`.
+
+`platforms` is a non-empty array of `shopify` and/or `wix`. One workflow generates content once and publishes to every listed platform.
 
 ## Crash harness
 
-`test/fullFlow.integration.test.ts` proves durability and zero duplicate payment.
+`test/fullFlow.integration.test.ts` proves durability and zero duplicate LLM/image payment when each article fans out to both platforms.

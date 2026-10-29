@@ -1,13 +1,16 @@
 import {
-  createCmsPlatformClient,
-  type CmsPlatformClient,
-} from '../clients/cmsPlatformClient';
+  createDefaultPlatformRegistry,
+  getPlatformAdapter,
+  type PlatformAdapterRegistry,
+  type PlatformId,
+} from '../platforms';
 import { mockS3 } from '../services/mockS3';
 import { metrics } from './metrics';
 
 export interface UploadCmsMediaInput {
   articleId: string;
   tenantId: string;
+  platform: PlatformId;
   imageS3Uri: string;
 }
 
@@ -16,17 +19,20 @@ export interface UploadCmsMediaResult {
 }
 
 /**
- * Fetches the image from Mock S3 (claim-check) and uploads it via the CMS
- * platform client. Returns only the CMS media id.
+ * Fetches the image from Mock S3 (claim-check) and uploads it via the
+ * platform adaptor for the article's target platform. Returns only the media id.
  */
-export function createUploadCmsMediaActivity(client: CmsPlatformClient) {
+export function createUploadCmsMediaActivity(
+  registry: PlatformAdapterRegistry = createDefaultPlatformRegistry(),
+) {
   return async function uploadCmsMediaActivity(
     input: UploadCmsMediaInput,
   ): Promise<UploadCmsMediaResult> {
     metrics.cmsUploads += 1;
 
     const imageData = await mockS3.get(input.imageS3Uri);
-    return client.uploadMedia({
+    const adapter = getPlatformAdapter(input.platform, registry);
+    return adapter.uploadMedia({
       articleId: input.articleId,
       tenantId: input.tenantId,
       imageData,
@@ -34,6 +40,4 @@ export function createUploadCmsMediaActivity(client: CmsPlatformClient) {
   };
 }
 
-export const uploadCmsMediaActivity = createUploadCmsMediaActivity(
-  createCmsPlatformClient(),
-);
+export const uploadCmsMediaActivity = createUploadCmsMediaActivity();

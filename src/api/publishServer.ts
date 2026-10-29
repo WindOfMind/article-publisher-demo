@@ -4,11 +4,13 @@ import express, {
   type Request,
   type Response,
 } from 'express';
+import { PLATFORM_IDS, normalizePlatformIds } from '../platforms';
 import type { ArticleService } from '../services/articleService';
 
 /**
  * Thin Express control surface that imitates an app layer driving article publish.
- * POST /tenants/:tenantId/articles  { articleId, topic } → 202 { workflowId, runId }
+ * POST /tenants/:tenantId/articles
+ *   { articleId, topic, platforms: ["shopify","wix"] } → 202 { workflowId, runId }
  */
 export function createPublishServer(articleService: ArticleService): Express {
   const app = express();
@@ -29,7 +31,10 @@ export function createPublishServer(articleService: ArticleService): Express {
           return;
         }
 
-        const { articleId, topic } = body as Record<string, unknown>;
+        const { articleId, topic, platforms: platformsRaw } = body as Record<
+          string,
+          unknown
+        >;
         if (typeof articleId !== 'string' || articleId.trim().length === 0) {
           res
             .status(400)
@@ -38,6 +43,13 @@ export function createPublishServer(articleService: ArticleService): Express {
         }
         if (typeof topic !== 'string' || topic.trim().length === 0) {
           res.status(400).json({ error: 'topic is required (non-empty string)' });
+          return;
+        }
+        const platforms = normalizePlatformIds(platformsRaw);
+        if (platforms === null) {
+          res.status(400).json({
+            error: `platforms is required (non-empty array of: ${PLATFORM_IDS.join(', ')})`,
+          });
           return;
         }
         if (tenantId.trim().length === 0) {
@@ -50,6 +62,7 @@ export function createPublishServer(articleService: ArticleService): Express {
         const result = await articleService.publishArticle({
           tenantId,
           articleId,
+          platforms,
           topic,
         });
         res.status(202).json(result);

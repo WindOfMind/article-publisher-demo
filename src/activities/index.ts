@@ -22,7 +22,10 @@ export type {
   UploadCmsMediaResult,
 } from './uploadCmsMediaActivity';
 
-export { publishCmsPostActivity } from './publishCmsPostActivity';
+export {
+  createPublishCmsPostActivity,
+  publishCmsPostActivity,
+} from './publishCmsPostActivity';
 export type {
   PublishCmsPostInput,
   PublishCmsPostResult,

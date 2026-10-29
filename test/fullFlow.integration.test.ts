@@ -12,18 +12,27 @@ import {
   DEFAULT_ARTICLE_TASK_QUEUE,
 } from '../src/services/articleService';
 import {
-  createCmsPlatformClient,
-  type CmsPlatformClient,
+  PLATFORM_IDS,
+  createDefaultPlatformRegistry,
+  type PlatformAdapter,
+  type PlatformAdapterRegistry,
+  type PlatformId,
   type UploadMediaParams,
   type UploadMediaResult,
-} from '../src/clients/cmsPlatformClient';
+} from '../src/platforms';
 import { mockRateLimiter } from '../src/services/mockRateLimiter';
 import { mockS3 } from '../src/services/mockS3';
-import type { ArticleWorkflowInput } from '../src/workflows';
+import type {
+  ArticleWorkflowInput,
+  PublishedArticleUrl,
+} from '../src/workflows';
 
 const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
 const BATCH_SIZE = 10;
 const TENANTS = ['tenant-a', 'tenant-b'] as const;
+/** Every article publishes to both demo platforms. */
+const ARTICLE_PLATFORMS = [...PLATFORM_IDS];
+const EXPECTED_PUBLISHES = BATCH_SIZE * ARTICLE_PLATFORMS.length;
 const WORKER1_RUNTIME_MS = 600;
 /** Keeps uploads in flight when Worker 1 is hard-killed (~600ms). */
 const UPLOAD_DELAY_MS = 2_000;
@@ -41,23 +50,32 @@ function buildBatch(): ArticleWorkflowInput[] {
     return {
       articleId,
       tenantId,
+      platforms: [...ARTICLE_PLATFORMS],
       topic: `SEO Topic ${i + 1}`,
     };
   });
 }
 
 /**
- * Test CMS client: same upload behaviour as the default mock, but with a long
+ * Test registry: same upload behaviour as the default adapters, but with a long
  * cancellable delay so the crash harness can kill Worker 1 mid-upload.
  */
-function createSlowCmsPlatformClient(delayMs: number): CmsPlatformClient {
-  const inner = createCmsPlatformClient();
-  return {
-    async uploadMedia(params: UploadMediaParams): Promise<UploadMediaResult> {
-      await cancellableDelay(delayMs);
-      return inner.uploadMedia(params);
-    },
-  };
+function createSlowPlatformRegistry(delayMs: number): PlatformAdapterRegistry {
+  const inner = createDefaultPlatformRegistry();
+  const slow = new Map<PlatformId, PlatformAdapter>();
+
+  for (const [platformId, adapter] of inner) {
+    slow.set(platformId, {
+      platformId: adapter.platformId,
+      async uploadMedia(params: UploadMediaParams): Promise<UploadMediaResult> {
+        await cancellableDelay(delayMs);
+        return adapter.uploadMedia(params);
+      },
+      publishPost: (params) => adapter.publishPost(params),
+    });
+  }
+
+  return slow;
 }
 
 async function cancellableDelay(ms: number): Promise<void> {
@@ -82,7 +100,7 @@ function createHarnessActivities() {
   return {
     ...activities,
     uploadCmsMediaActivity: createUploadCmsMediaActivity(
-      createSlowCmsPlatformClient(UPLOAD_DELAY_MS),
+      createSlowPlatformRegistry(UPLOAD_DELAY_MS),
     ),
   };
 }
@@ -104,19 +122,26 @@ async function createWorker(
   });
 }
 
+function isLivePlatformUrl(url: string): boolean {
+  return (
+    url.startsWith('https://') &&
+    (url.includes('.myshopify.com/') || url.includes('.wixsite.com/'))
+  );
+}
+
 /**
-  1. Starts **10 workflows** across **2 tenants**.
+  1. Starts **10 workflows** across **2 tenants**; each article targets **shopify + wix**.
   2. Starts **Worker 1**, runs ~600ms (text + image complete; uploads in flight).
   3. **Hard-kills Worker 1** (simulates OOM / restart).
   4. Asserts intermediate LLM/image calls already happened.
   5. Starts **Worker 2** on the same task queue.
   6. Awaits all handles, then asserts:
-    - All 10 workflows return live CMS URLs
-    - `metrics.llmCalls === 10` (no duplicate LLM payment)
-    - `metrics.imageCalls === 10` (no duplicate image payment)
-    - `metrics.cmsPublishes === 10`
+    - All 10 workflows return live URLs for both platforms
+    - `metrics.llmCalls === 10` (content generated once per article)
+    - `metrics.imageCalls === 10`
+    - `metrics.cmsPublishes === 20` (10 articles × 2 platforms)
 
-  Uploads abandoned by Worker 1 are retried by Worker 2 (`cmsUploads` may be > 10);
+  Uploads abandoned by Worker 1 are retried by Worker 2 (`cmsUploads` may be > 20);
   completed LLM/image steps are not re-executed because Temporal recorded their results in workflow history.
 */
 
@@ -132,7 +157,7 @@ async function main(): Promise<void> {
   try {
     const batch = buildBatch();
     console.log(
-      `Starting ${batch.length} article workflows across tenants: ${TENANTS.join(', ')}`,
+      `Starting ${batch.length} article workflows across tenants: ${TENANTS.join(', ')}, platforms per article: ${ARTICLE_PLATFORMS.join(', ')}`,
     );
 
     const articleService = new ArticleService(env.client, TASK_QUEUE);
@@ -189,7 +214,9 @@ async function main(): Promise<void> {
 
     const worker2Run = worker2.run();
 
-    const results = await Promise.all(handles.map((h) => h.result()));
+    const results = (await Promise.all(
+      handles.map((h) => h.result()),
+    )) as PublishedArticleUrl[][];
 
     worker2.shutdown();
     await worker2Run;
@@ -201,20 +228,36 @@ async function main(): Promise<void> {
       `expected ${BATCH_SIZE} results, got ${results.length}`,
     );
 
-    for (const [i, url] of results.entries()) {
+    for (const [i, published] of results.entries()) {
       assert(
-        typeof url === 'string' && url.startsWith('https://cms.example.com/'),
-        `workflow ${i} did not return a live URL: ${String(url)}`,
+        Array.isArray(published) &&
+          published.length === ARTICLE_PLATFORMS.length,
+        `workflow ${i} expected ${ARTICLE_PLATFORMS.length} platform URLs, got ${String(published)}`,
       );
+      const platforms = new Set(published.map((p) => p.platform));
+      for (const platform of ARTICLE_PLATFORMS) {
+        assert(
+          platforms.has(platform),
+          `workflow ${i} missing platform ${platform}`,
+        );
+      }
+      for (const { liveUrl } of published) {
+        assert(
+          isLivePlatformUrl(liveUrl),
+          `workflow ${i} returned non-live URL: ${liveUrl}`,
+        );
+      }
     }
-    console.log(`✓ All ${BATCH_SIZE} workflows returned live URLs.`);
+    console.log(
+      `✓ All ${BATCH_SIZE} workflows returned live URLs for ${ARTICLE_PLATFORMS.join(' + ')}.`,
+    );
 
     assert(
       metrics.llmCalls === BATCH_SIZE,
       `zero-duplicate LLM payment violated: llmCalls=${metrics.llmCalls}, expected ${BATCH_SIZE}`,
     );
     console.log(
-      `✓ metrics.llmCalls === ${BATCH_SIZE} (zero duplicate payment)`,
+      `✓ metrics.llmCalls === ${BATCH_SIZE} (one generation per article)`,
     );
 
     assert(
@@ -222,14 +265,16 @@ async function main(): Promise<void> {
       `zero-duplicate image payment violated: imageCalls=${metrics.imageCalls}, expected ${BATCH_SIZE}`,
     );
     console.log(
-      `✓ metrics.imageCalls === ${BATCH_SIZE} (zero duplicate payment)`,
+      `✓ metrics.imageCalls === ${BATCH_SIZE} (one generation per article)`,
     );
 
     assert(
-      metrics.cmsPublishes === BATCH_SIZE,
-      `cmsPublishes=${metrics.cmsPublishes}, expected ${BATCH_SIZE}`,
+      metrics.cmsPublishes === EXPECTED_PUBLISHES,
+      `cmsPublishes=${metrics.cmsPublishes}, expected ${EXPECTED_PUBLISHES}`,
     );
-    console.log(`✓ metrics.cmsPublishes === ${BATCH_SIZE}`);
+    console.log(
+      `✓ metrics.cmsPublishes === ${EXPECTED_PUBLISHES} (${BATCH_SIZE} × ${ARTICLE_PLATFORMS.length} platforms)`,
+    );
 
     console.log('\nFinal metrics:');
     console.log(`  llmCalls     = ${metrics.llmCalls}`);
