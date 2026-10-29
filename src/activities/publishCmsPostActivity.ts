@@ -1,3 +1,4 @@
+import { log } from '@temporalio/activity';
 import { ApplicationFailure } from '@temporalio/common';
 import {
   createDefaultPlatformRegistry,
@@ -49,6 +50,13 @@ export function createPublishCmsPostActivity(
   return async function publishCmsPostActivity(
     input: PublishCmsPostInput,
   ): Promise<PublishCmsPostResult> {
+    log.info('Publishing CMS post', {
+      articleId: input.articleId,
+      tenantId: input.tenantId,
+      platform: input.platform,
+      cmsMediaId: input.cmsMediaId,
+    });
+
     const tKey = tenantKey(input.tenantId);
     const pKey = platformKey(input.platform);
 
@@ -58,6 +66,11 @@ export function createPublishCmsPostActivity(
     ]);
 
     if (exhausted === tKey) {
+      log.warn('Tenant publish rate limit exceeded', {
+        articleId: input.articleId,
+        tenantId: input.tenantId,
+        limitRps: TENANT_PUBLISH_RPS,
+      });
       throw ApplicationFailure.create({
         message: `Tenant ${input.tenantId} exceeded publish rate limit of ${TENANT_PUBLISH_RPS} RPS`,
         type: 'TENANT_RATE_LIMITED',
@@ -66,6 +79,12 @@ export function createPublishCmsPostActivity(
     }
 
     if (exhausted === pKey) {
+      log.warn('Platform publish rate limit exceeded', {
+        articleId: input.articleId,
+        tenantId: input.tenantId,
+        platform: input.platform,
+        limitRps: PLATFORM_PUBLISH_RPS,
+      });
       throw ApplicationFailure.create({
         message: `Platform ${input.platform} exceeded publish rate limit of ${PLATFORM_PUBLISH_RPS} RPS (tenant ${input.tenantId})`,
         type: 'PLATFORM_RATE_LIMITED',
@@ -78,6 +97,10 @@ export function createPublishCmsPostActivity(
     // Claim-check: pull markdown from Mock S3 rather than receiving it as an activity arg.
     const markdown = await mockS3.get(input.textS3Uri);
     if (typeof markdown !== 'string' || markdown.length === 0) {
+      log.error('Missing or empty markdown for publish', {
+        articleId: input.articleId,
+        textS3Uri: input.textS3Uri,
+      });
       throw ApplicationFailure.create({
         message: `Missing or empty markdown at ${input.textS3Uri}`,
         type: 'INVALID_CONTENT',
@@ -86,13 +109,21 @@ export function createPublishCmsPostActivity(
     }
 
     const adapter = getPlatformAdapter(input.platform, registry);
-    return adapter.publishPost({
+    const result = await adapter.publishPost({
       articleId: input.articleId,
       tenantId: input.tenantId,
       topic: input.topic,
       markdown,
       cmsMediaId: input.cmsMediaId,
     });
+
+    log.info('CMS post published', {
+      articleId: input.articleId,
+      platform: input.platform,
+      liveUrl: result.liveUrl,
+    });
+
+    return result;
   };
 }
 

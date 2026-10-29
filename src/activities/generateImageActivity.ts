@@ -1,4 +1,4 @@
-import { Context } from '@temporalio/activity';
+import { Context, log } from '@temporalio/activity';
 import { mockS3 } from '../services/mockS3';
 import { metrics } from './metrics';
 
@@ -53,6 +53,12 @@ const MOCK_WEBP: Buffer = Buffer.from([
 export async function generateImageActivity(
   input: GenerateImageInput,
 ): Promise<GenerateImageResult> {
+  log.info('Generating article image', {
+    articleId: input.articleId,
+    tenantId: input.tenantId,
+    topic: input.topic,
+  });
+
   metrics.imageCalls += 1;
 
   const ctx = Context.current();
@@ -67,6 +73,8 @@ export async function generateImageActivity(
     `articles/${input.tenantId}/${input.articleId}/hero.webp`,
     Buffer.from(MOCK_WEBP),
   );
+
+  log.info('Article image stored', { articleId: input.articleId, imageS3Uri });
 
   return { imageS3Uri };
 }

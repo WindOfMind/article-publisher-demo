@@ -1,3 +1,4 @@
+import { log } from '@temporalio/activity';
 import { mockS3 } from '../services/mockS3';
 import { metrics } from './metrics';
 
@@ -18,9 +19,15 @@ export interface GenerateTextResult {
 export async function generateTextActivity(
   input: GenerateTextInput,
 ): Promise<GenerateTextResult> {
+  log.info('Generating article text', {
+    articleId: input.articleId,
+    tenantId: input.tenantId,
+    topic: input.topic,
+  });
+
   metrics.llmCalls += 1;
 
-  // Simulate a short LLM latency so the harness can interleave work.
+  // Simulate a short LLM latency.
   await delay(40);
 
   const markdown = [
@@ -41,6 +48,8 @@ export async function generateTextActivity(
     `articles/${input.tenantId}/${input.articleId}/content.md`,
     markdown,
   );
+
+  log.info('Article text stored', { articleId: input.articleId, textS3Uri });
 
   return { textS3Uri };
 }

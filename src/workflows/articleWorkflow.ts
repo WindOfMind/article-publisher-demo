@@ -1,4 +1,4 @@
-import { proxyActivities } from '@temporalio/workflow';
+import { log, proxyActivities } from '@temporalio/workflow';
 import type { PlatformId } from '../platforms/types';
 import type * as activities from '../activities';
 
@@ -49,6 +49,13 @@ const { publishCmsPostActivity } = proxyActivities<typeof activities>({
 export async function articleWorkflow(
   input: ArticleWorkflowInput,
 ): Promise<PublishedArticleUrl[]> {
+  log.info('Article workflow started', {
+    articleId: input.articleId,
+    tenantId: input.tenantId,
+    platforms: input.platforms,
+    topic: input.topic,
+  });
+
   const [{ textS3Uri }, { imageS3Uri }] = await Promise.all([
     generateTextActivity({
       articleId: input.articleId,
@@ -62,8 +69,19 @@ export async function articleWorkflow(
     }),
   ]);
 
-  return Promise.all(
+  log.info('Content generated', {
+    articleId: input.articleId,
+    textS3Uri,
+    imageS3Uri,
+  });
+
+  const published = await Promise.all(
     input.platforms.map(async (platform) => {
+      log.info('Publishing to platform', {
+        articleId: input.articleId,
+        platform,
+      });
+
       const { cmsMediaId } = await uploadCmsMediaActivity({
         articleId: input.articleId,
         tenantId: input.tenantId,
@@ -80,7 +98,20 @@ export async function articleWorkflow(
         cmsMediaId,
       });
 
+      log.info('Published to platform', {
+        articleId: input.articleId,
+        platform,
+        liveUrl,
+      });
+
       return { platform, liveUrl };
     }),
   );
+
+  log.info('Article workflow completed', {
+    articleId: input.articleId,
+    publishedCount: published.length,
+  });
+
+  return published;
 }
