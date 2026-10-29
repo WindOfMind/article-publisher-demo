@@ -40,7 +40,7 @@ src/
     articleService.ts    # Control layer: start articleWorkflow per tenant
     mockS3.ts            # In-memory Map store (claim-check)
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
-  api/
+  server/
     publishServer.ts     # Express POST /tenants/:tenantId/articles
     main.ts              # Connect Temporal client + listen (PORT=3000)
   activities/
@@ -75,7 +75,7 @@ Requires a Temporal server and a worker on task queue `article-publisher-poc`.
 
 ```bash
 npm run build
-npm run publish:api   # POST http://localhost:3000/tenants/:tenantId/articles
+npm run publish:server   # POST http://localhost:3000/tenants/:tenantId/articles
 ```
 
 Body: `{ "articleId": "article-01", "topic": "SEO Topic 1", "platforms": ["shopify", "wix"] }` → `202` `{ workflowId, runId }`.
