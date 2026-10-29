@@ -19,10 +19,10 @@ async function main(): Promise<void> {
   const connection = await Connection.connect({ address });
   const client = new Client({ connection, namespace });
   const articleService = new ArticleService(client, taskQueue);
-  const server = createPublishServer(articleService);
+  const app = createPublishServer(articleService);
 
   await new Promise<void>((resolve) => {
-    server.listen(port, () => resolve());
+    app.listen(port, () => resolve());
   });
 
   console.log(

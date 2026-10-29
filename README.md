@@ -25,7 +25,7 @@ src/
     mockS3.ts            # In-memory Map store (claim-check)
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
   api/
-    publishServer.ts     # HTTP POST /tenants/:tenantId/articles
+    publishServer.ts     # Express POST /tenants/:tenantId/articles
     main.ts              # Connect Temporal client + listen (PORT=3000)
   activities/
     generateTextActivity.ts
