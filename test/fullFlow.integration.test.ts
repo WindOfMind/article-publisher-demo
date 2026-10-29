@@ -2,12 +2,15 @@ import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import { metrics, resetMetrics } from '../src/activities';
 import * as activities from '../src/activities';
+import {
+  ArticleService,
+  DEFAULT_ARTICLE_TASK_QUEUE,
+} from '../src/services/articleService';
 import { mockRateLimiter } from '../src/services/mockRateLimiter';
 import { mockS3 } from '../src/services/mockS3';
 import type { ArticleWorkflowInput } from '../src/workflows';
-import { articleWorkflow } from '../src/workflows';
 
-const TASK_QUEUE = 'article-publisher-poc';
+const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
 const BATCH_SIZE = 10;
 const TENANTS = ['tenant-a', 'tenant-b'] as const;
 const WORKER1_RUNTIME_MS = 600;
@@ -78,14 +81,12 @@ async function main(): Promise<void> {
       `Starting ${batch.length} article workflows across tenants: ${TENANTS.join(', ')}`,
     );
 
-    const handles = await Promise.all(
-      batch.map((input) =>
-        env.client.workflow.start(articleWorkflow, {
-          taskQueue: TASK_QUEUE,
-          workflowId: `publish-${input.tenantId}-${input.articleId}`,
-          args: [input],
-        }),
-      ),
+    const articleService = new ArticleService(env.client, TASK_QUEUE);
+    const started = await Promise.all(
+      batch.map((input) => articleService.publishArticle(input)),
+    );
+    const handles = started.map((s) =>
+      env.client.workflow.getHandle(s.workflowId, s.runId),
     );
 
     // --- Worker 1: run briefly, then hard-kill mid-flight ---

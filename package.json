@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node dist/test/fullFlow.integration.test.js",
+    "publish:api": "node dist/src/api/main.js",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

@@ -21,8 +21,12 @@ Large payloads never travel through Temporal activity return values — only S3 
 ```
 src/
   services/
+    articleService.ts    # Control layer: start articleWorkflow per tenant
     mockS3.ts            # In-memory Map store (claim-check)
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
+  api/
+    publishServer.ts     # HTTP POST /tenants/:tenantId/articles
+    main.ts              # Connect Temporal client + listen (PORT=3000)
   activities/
     generateTextActivity.ts
     generateImageActivity.ts
@@ -48,6 +52,17 @@ npm test    # tsc + crash harness
 ```
 
 `npm run build` compiles TypeScript to `dist/` only.
+
+### Publish control API (optional)
+
+Requires a Temporal server and a worker on task queue `article-publisher-poc`.
+
+```bash
+npm run build
+npm run publish:api   # POST http://localhost:3000/tenants/:tenantId/articles
+```
+
+Body: `{ "articleId": "article-01", "topic": "SEO Topic 1" }` → `202` `{ workflowId, runId }`.
 
 ## Crash harness
 
