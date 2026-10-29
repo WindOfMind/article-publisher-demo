@@ -15,25 +15,52 @@ export interface PublishCmsPostResult {
   liveUrl: string;
 }
 
+const CMS_PLATFORM_ID = 'cms';
+/** Per-tenant publish budget. */
 const TENANT_PUBLISH_RPS = 2;
+/** Shared CMS publish budget across every tenant. */
+const PLATFORM_PUBLISH_RPS = 5;
+
+function tenantKey(tenantId: string): string {
+  return `tenant:${tenantId}`;
+}
+
+function platformKey(platformId: string): string {
+  return `platform:${platformId}`;
+}
 
 /**
- * Publishes a CMS post subject to a per-tenant rate limit (2 RPS).
+ * Publishes a CMS post subject to dual rate limits:
+ * - per-tenant (2 RPS)
+ * - per-platform (5 RPS total across all tenants)
+ *
  * On exhaustion throws a non-retryable ApplicationFailure of type
- * TENANT_RATE_LIMITED so the workflow can sleep and retry cooperatively.
+ * TENANT_RATE_LIMITED or PLATFORM_RATE_LIMITED so the workflow can sleep
+ * and retry cooperatively.
  */
 export async function publishCmsPostActivity(
   input: PublishCmsPostInput,
 ): Promise<PublishCmsPostResult> {
-  const acquired = mockRateLimiter.tryAcquire(
-    input.tenantId,
-    TENANT_PUBLISH_RPS,
-  );
+  const tKey = tenantKey(input.tenantId);
+  const pKey = platformKey(CMS_PLATFORM_ID);
 
-  if (!acquired) {
+  const exhausted = mockRateLimiter.tryAcquireAll([
+    { key: tKey, limitRps: TENANT_PUBLISH_RPS },
+    { key: pKey, limitRps: PLATFORM_PUBLISH_RPS },
+  ]);
+
+  if (exhausted === tKey) {
     throw ApplicationFailure.create({
       message: `Tenant ${input.tenantId} exceeded publish rate limit of ${TENANT_PUBLISH_RPS} RPS`,
       type: 'TENANT_RATE_LIMITED',
+      nonRetryable: true,
+    });
+  }
+
+  if (exhausted === pKey) {
+    throw ApplicationFailure.create({
+      message: `Platform ${CMS_PLATFORM_ID} exceeded publish rate limit of ${PLATFORM_PUBLISH_RPS} RPS (tenant ${input.tenantId})`,
+      type: 'PLATFORM_RATE_LIMITED',
       nonRetryable: true,
     });
   }

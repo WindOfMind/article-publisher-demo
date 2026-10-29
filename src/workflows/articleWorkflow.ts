@@ -30,8 +30,8 @@ const {
 /**
  * Orchestrates Text ∥ Image → Media Upload → Publish.
  * Text and image generation run in parallel; CMS publish is wrapped in a
- * cooperative retry loop: on TENANT_RATE_LIMITED the workflow sleeps 1s
- * (yielding the worker) and retries without failing.
+ * cooperative retry loop: on TENANT_RATE_LIMITED / PLATFORM_RATE_LIMITED the
+ * workflow sleeps 1s (yielding the worker) and retries without failing.
  */
 export async function articleWorkflow(
   input: ArticleWorkflowInput,
@@ -67,7 +67,7 @@ export async function articleWorkflow(
       });
       return liveUrl;
     } catch (err) {
-      if (isTenantRateLimited(err)) {
+      if (isRateLimited(err)) {
         await sleep('1 second');
         continue;
       }
@@ -76,12 +76,21 @@ export async function articleWorkflow(
   }
 }
 
-function isTenantRateLimited(err: unknown): boolean {
+const RATE_LIMIT_TYPES = new Set([
+  'TENANT_RATE_LIMITED',
+  'PLATFORM_RATE_LIMITED',
+]);
+
+function isRateLimited(err: unknown): boolean {
   if (!(err instanceof ActivityFailure)) {
     return false;
   }
+
   const cause = err.cause;
+
   return (
-    cause instanceof ApplicationFailure && cause.type === 'TENANT_RATE_LIMITED'
+    cause instanceof ApplicationFailure &&
+    typeof cause.type === 'string' &&
+    RATE_LIMIT_TYPES.has(cause.type)
   );
 }
