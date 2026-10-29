@@ -34,9 +34,8 @@ function platformKey(platformId: string): string {
  * - per-tenant (2 RPS)
  * - per-platform (5 RPS total across all tenants)
  *
- * On exhaustion throws a non-retryable ApplicationFailure of type
- * TENANT_RATE_LIMITED or PLATFORM_RATE_LIMITED so the workflow can sleep
- * and retry cooperatively.
+ * On exhaustion throws a retryable ApplicationFailure with nextRetryDelay so
+ * Temporal's activity Retry Policy backs off and retries (Delayed Retry).
  */
 export async function publishCmsPostActivity(
   input: PublishCmsPostInput,
@@ -53,7 +52,7 @@ export async function publishCmsPostActivity(
     throw ApplicationFailure.create({
       message: `Tenant ${input.tenantId} exceeded publish rate limit of ${TENANT_PUBLISH_RPS} RPS`,
       type: 'TENANT_RATE_LIMITED',
-      nonRetryable: true,
+      nextRetryDelay: '1 second',
     });
   }
 
@@ -61,7 +60,7 @@ export async function publishCmsPostActivity(
     throw ApplicationFailure.create({
       message: `Platform ${CMS_PLATFORM_ID} exceeded publish rate limit of ${PLATFORM_PUBLISH_RPS} RPS (tenant ${input.tenantId})`,
       type: 'PLATFORM_RATE_LIMITED',
-      nonRetryable: true,
+      nextRetryDelay: '1 second',
     });
   }
 

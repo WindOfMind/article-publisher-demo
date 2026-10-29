@@ -12,7 +12,7 @@ Article -> Text (LLM) ∥ Image → CMS Media Upload → CMS Publish
 
 1. **generateTextActivity** / **generateImageActivity** — run in parallel. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: mock render with heartbeats; stores WebP in Mock S3; returns `imageS3Uri`.
 2. **uploadCmsMediaActivity** — fetches image from Mock S3; returns `cmsMediaId`.
-3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants). On exhaustion throws `TENANT_RATE_LIMITED` or `PLATFORM_RATE_LIMITED`; the workflow sleeps 1s and retries without failing.
+3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants). On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries.
 
 Large payloads never travel through Temporal activity return values — only S3 URIs and CMS IDs do.
 
@@ -30,7 +30,7 @@ src/
     publishCmsPostActivity.ts
     metrics.ts           # llmCalls / imageCalls / cmsUploads / cmsPublishes
   workflows/
-    articleWorkflow.ts   # Orchestration + cooperative rate-limit retry
+    articleWorkflow.ts   # Orchestration; publish rate limits via activity retries
 test/
   fullFlow.integration.test.ts  # Crash / recovery harness
 ```

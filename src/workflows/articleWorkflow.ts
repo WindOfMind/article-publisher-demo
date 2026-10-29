@@ -1,9 +1,4 @@
-import {
-  ActivityFailure,
-  ApplicationFailure,
-  proxyActivities,
-  sleep,
-} from '@temporalio/workflow';
+import { proxyActivities } from '@temporalio/workflow';
 import type * as activities from '../activities';
 
 export interface ArticleWorkflowInput {
@@ -12,26 +7,33 @@ export interface ArticleWorkflowInput {
   topic: string;
 }
 
-const {
-  generateTextActivity,
-  generateImageActivity,
-  uploadCmsMediaActivity,
-  publishCmsPostActivity,
-} = proxyActivities<typeof activities>({
+const { generateTextActivity, generateImageActivity, uploadCmsMediaActivity } =
+  proxyActivities<typeof activities>({
+    startToCloseTimeout: '2 minutes',
+    heartbeatTimeout: '30 seconds',
+    retry: {
+      initialInterval: '1 second',
+      backoffCoefficient: 2,
+      maximumAttempts: 5,
+    },
+  });
+
+/** Publish uses Temporal activity retries for rate limits (nextRetryDelay). */
+const { publishCmsPostActivity } = proxyActivities<typeof activities>({
   startToCloseTimeout: '2 minutes',
-  heartbeatTimeout: '30 seconds',
   retry: {
     initialInterval: '1 second',
-    backoffCoefficient: 2,
-    maximumAttempts: 5,
+    backoffCoefficient: 1,
+    maximumInterval: '1 second',
+    // Unbounded: rate limits are transient; delay comes from nextRetryDelay.
+    maximumAttempts: Number.POSITIVE_INFINITY,
   },
 });
 
 /**
  * Orchestrates Text ∥ Image → Media Upload → Publish.
- * Text and image generation run in parallel; CMS publish is wrapped in a
- * cooperative retry loop: on TENANT_RATE_LIMITED / PLATFORM_RATE_LIMITED the
- * workflow sleeps 1s (yielding the worker) and retries without failing.
+ * Text and image generation run in parallel. Rate-limited publish failures
+ * are retried by the activity Retry Policy via nextRetryDelay.
  */
 export async function articleWorkflow(
   input: ArticleWorkflowInput,
@@ -55,42 +57,12 @@ export async function articleWorkflow(
     imageS3Uri,
   });
 
-  // Cooperative rate-limit handling — sleep yields the worker thread.
-  for (;;) {
-    try {
-      const { liveUrl } = await publishCmsPostActivity({
-        articleId: input.articleId,
-        tenantId: input.tenantId,
-        topic: input.topic,
-        textS3Uri,
-        cmsMediaId,
-      });
-      return liveUrl;
-    } catch (err) {
-      if (isRateLimited(err)) {
-        await sleep('1 second');
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-const RATE_LIMIT_TYPES = new Set([
-  'TENANT_RATE_LIMITED',
-  'PLATFORM_RATE_LIMITED',
-]);
-
-function isRateLimited(err: unknown): boolean {
-  if (!(err instanceof ActivityFailure)) {
-    return false;
-  }
-
-  const cause = err.cause;
-
-  return (
-    cause instanceof ApplicationFailure &&
-    typeof cause.type === 'string' &&
-    RATE_LIMIT_TYPES.has(cause.type)
-  );
+  const { liveUrl } = await publishCmsPostActivity({
+    articleId: input.articleId,
+    tenantId: input.tenantId,
+    topic: input.topic,
+    textS3Uri,
+    cmsMediaId,
+  });
+  return liveUrl;
 }
