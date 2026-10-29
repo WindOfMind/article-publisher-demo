@@ -13,7 +13,10 @@ export type {
   GenerateImageResult,
 } from './generateImageActivity';
 
-export { uploadCmsMediaActivity } from './uploadCmsMediaActivity';
+export {
+  createUploadCmsMediaActivity,
+  uploadCmsMediaActivity,
+} from './uploadCmsMediaActivity';
 export type {
   UploadCmsMediaInput,
   UploadCmsMediaResult,

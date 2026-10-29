@@ -1,11 +1,22 @@
+import { Context } from '@temporalio/activity';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
-import { metrics, resetMetrics } from '../src/activities';
+import {
+  createUploadCmsMediaActivity,
+  metrics,
+  resetMetrics,
+} from '../src/activities';
 import * as activities from '../src/activities';
 import {
   ArticleService,
   DEFAULT_ARTICLE_TASK_QUEUE,
 } from '../src/services/articleService';
+import {
+  createCmsPlatformClient,
+  type CmsPlatformClient,
+  type UploadMediaParams,
+  type UploadMediaResult,
+} from '../src/clients/cmsPlatformClient';
 import { mockRateLimiter } from '../src/services/mockRateLimiter';
 import { mockS3 } from '../src/services/mockS3';
 import type { ArticleWorkflowInput } from '../src/workflows';
@@ -14,6 +25,8 @@ const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
 const BATCH_SIZE = 10;
 const TENANTS = ['tenant-a', 'tenant-b'] as const;
 const WORKER1_RUNTIME_MS = 600;
+/** Keeps uploads in flight when Worker 1 is hard-killed (~600ms). */
+const UPLOAD_DELAY_MS = 2_000;
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) {
@@ -33,6 +46,47 @@ function buildBatch(): ArticleWorkflowInput[] {
   });
 }
 
+/**
+ * Test CMS client: same upload behaviour as the default mock, but with a long
+ * cancellable delay so the crash harness can kill Worker 1 mid-upload.
+ */
+function createSlowCmsPlatformClient(delayMs: number): CmsPlatformClient {
+  const inner = createCmsPlatformClient();
+  return {
+    async uploadMedia(params: UploadMediaParams): Promise<UploadMediaResult> {
+      await cancellableDelay(delayMs);
+      return inner.uploadMedia(params);
+    },
+  };
+}
+
+async function cancellableDelay(ms: number): Promise<void> {
+  const ctx = Context.current();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+      // Rejects with CancelledFailure when the worker shuts down mid-upload.
+      ctx.cancelled,
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function createHarnessActivities() {
+  return {
+    ...activities,
+    uploadCmsMediaActivity: createUploadCmsMediaActivity(
+      createSlowCmsPlatformClient(UPLOAD_DELAY_MS),
+    ),
+  };
+}
+
 async function createWorker(
   env: TestWorkflowEnvironment,
   label: string,
@@ -41,7 +95,7 @@ async function createWorker(
     connection: env.nativeConnection,
     taskQueue: TASK_QUEUE,
     workflowsPath: require.resolve('../src/workflows'),
-    activities,
+    activities: createHarnessActivities(),
     // Brief grace window so in-flight uploads see cancellation (OOM / restart).
     // Activities that ignore cancel would otherwise drain to completion.
     shutdownGraceTime: '50 ms',
@@ -50,7 +104,7 @@ async function createWorker(
   });
 }
 
-/** 
+/**
   1. Starts **10 workflows** across **2 tenants**.
   2. Starts **Worker 1**, runs ~600ms (text + image complete; uploads in flight).
   3. **Hard-kills Worker 1** (simulates OOM / restart).
@@ -62,7 +116,7 @@ async function createWorker(
     - `metrics.imageCalls === 10` (no duplicate image payment)
     - `metrics.cmsPublishes === 10`
 
-  Uploads abandoned by Worker 1 are retried by Worker 2 (`cmsUploads` may be > 10); 
+  Uploads abandoned by Worker 1 are retried by Worker 2 (`cmsUploads` may be > 10);
   completed LLM/image steps are not re-executed because Temporal recorded their results in workflow history.
 */
 
