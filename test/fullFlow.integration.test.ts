@@ -41,7 +41,10 @@ import {
   promptCacheKey,
 } from '../src/infra/llmGateway';
 import type { PublishedArticleUrl } from '../src/workflows';
-import type { GenerateImageResult } from '../src/activities';
+import type {
+  GenerateImageResult,
+  GenerateTextResult,
+} from '../src/activities';
 
 const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
 const BATCH_SIZE = 10;
@@ -92,6 +95,72 @@ function createSlowPlatformRegistry(delayMs: number): PlatformAdapterRegistry {
   }
 
   return slow;
+}
+
+/**
+ * LLM gateway: normalize + hash cache key; miss calls provider once; hit skips it.
+ */
+async function assertTextGatewayCache(): Promise<void> {
+  console.log('=== LLM text gateway cache ===\n');
+
+  resetMetrics();
+  mockS3.clear();
+  llmGateway.clear();
+
+  const first = (await new MockActivityEnvironment().run(
+    activities.generateTextActivity,
+    {
+      articleId: 'txt-a',
+      tenantId: 'tenant-cache',
+      topic: '  SEO  Topic   One  ',
+    },
+  )) as GenerateTextResult;
+  assert(!first.cacheHit, 'first generation must be a cache miss');
+  const callsAfterMiss = metrics.llmCalls;
+  const hitsAfterMiss = metrics.textCacheHits;
+  assert(
+    callsAfterMiss === 1,
+    `expected llmCalls=1 after miss, got ${callsAfterMiss}`,
+  );
+  assert(
+    hitsAfterMiss === 0,
+    `expected textCacheHits=0 after miss, got ${hitsAfterMiss}`,
+  );
+  assert(llmGateway.cacheSize() === 1, 'miss should populate gateway cache');
+  console.log('✓ Cache miss invokes mocked LLM text provider once.');
+
+  const second = (await new MockActivityEnvironment().run(
+    activities.generateTextActivity,
+    {
+      articleId: 'txt-b',
+      tenantId: 'tenant-cache',
+      topic: 'SEO Topic One',
+    },
+  )) as GenerateTextResult;
+  assert(
+    second.cacheHit,
+    'second generation with same topic must be a cache hit',
+  );
+  const callsAfterHit = metrics.llmCalls;
+  const hitsAfterHit = metrics.textCacheHits;
+  assert(
+    callsAfterHit === 1,
+    `cache hit must not increment llmCalls, got ${callsAfterHit}`,
+  );
+  assert(
+    hitsAfterHit === 1,
+    `expected textCacheHits=1 after hit, got ${hitsAfterHit}`,
+  );
+
+  const firstMarkdown = await mockS3.get(first.textS3Uri);
+  const secondMarkdown = await mockS3.get(second.textS3Uri);
+  assert(
+    typeof firstMarkdown === 'string' &&
+      typeof secondMarkdown === 'string' &&
+      firstMarkdown === secondMarkdown,
+    'cached markdown must match the original generation',
+  );
+  console.log('✓ Cache hit reuses markdown and skips provider (cost saved).\n');
 }
 
 /**
@@ -324,6 +393,7 @@ function isLivePlatformUrl(url: string): boolean {
 */
 
 async function main(): Promise<void> {
+  await assertTextGatewayCache();
   await assertImageGatewayCache();
   await assertRetryOnlyCmsLookup();
 
@@ -376,6 +446,7 @@ async function main(): Promise<void> {
     // Intermediate progress must have been made before the crash.
     console.log('Intermediate metrics after Worker 1 crash:');
     console.log(`  llmCalls        = ${metrics.llmCalls}`);
+    console.log(`  textCacheHits   = ${metrics.textCacheHits}`);
     console.log(`  imageCalls      = ${metrics.imageCalls}`);
     console.log(`  imageCacheHits  = ${metrics.imageCacheHits}`);
     console.log(`  cmsUploads      = ${metrics.cmsUploads}`);
@@ -497,12 +568,13 @@ async function main(): Promise<void> {
 
     console.log('\nFinal metrics:');
     console.log(`  llmCalls        = ${metrics.llmCalls}`);
+    console.log(`  textCacheHits   = ${metrics.textCacheHits}`);
     console.log(`  imageCalls      = ${metrics.imageCalls}`);
     console.log(`  imageCacheHits  = ${metrics.imageCacheHits}`);
     console.log(`  cmsUploads      = ${metrics.cmsUploads}`);
     console.log(`  cmsPublishes    = ${metrics.cmsPublishes}`);
     console.log(`  mockS3 objects  = ${mockS3.size()}`);
-    console.log(`  llm image cache = ${llmGateway.cacheSize()}`);
+    console.log(`  llm cache       = ${llmGateway.cacheSize()}`);
 
     console.log('\n=== PoC PASSED ===');
   } finally {

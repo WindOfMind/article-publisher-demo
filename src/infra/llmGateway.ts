@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 /**
- * Collapse prompt/topic variants that should share one generated image
+ * Collapse prompt/topic variants that should share one generated result
  * (case, surrounding whitespace, repeated spaces).
  */
 export function normalizePrompt(prompt: string): string {
@@ -51,6 +51,16 @@ const MOCK_WEBP: Buffer = Buffer.from([
   0x00,
 ]);
 
+export interface GenerateTextRequest {
+  prompt: string;
+}
+
+export interface GenerateTextResponse {
+  markdown: string;
+  cacheHit: boolean;
+  cacheKey: string;
+}
+
 export interface GenerateImageRequest {
   prompt: string;
 }
@@ -61,8 +71,33 @@ export interface GenerateImageResponse {
   cacheKey: string;
 }
 
+export interface LlmTextProvider {
+  generateText(prompt: string): Promise<string>;
+}
+
 export interface LlmImageProvider {
   generateImage(prompt: string): Promise<Buffer>;
+}
+
+/**
+ * Mock LLM text provider. Simulates paid generation latency; each call is a
+ * billable event that the gateway avoids on cache hits.
+ */
+export class MockLlmTextProvider implements LlmTextProvider {
+  async generateText(prompt: string): Promise<string> {
+    await delay(40);
+    return [
+      `# ${prompt}`,
+      '',
+      `This is mock SEO content about **${prompt}**.`,
+      '',
+      '## Key takeaways',
+      '',
+      '- Point one',
+      '- Point two',
+      '- Point three',
+    ].join('\n');
+  }
 }
 
 /**
@@ -84,14 +119,42 @@ export class MockLlmImageProvider implements LlmImageProvider {
 
 /**
  * Cost-saving LLM gateway: normalize → hash → cache lookup → provider on miss.
- * Image bytes are cached by prompt identity so repeated topics skip the LLM.
+ * Text and image results are cached by prompt identity so repeated topics skip
+ * the LLM.
  */
 export class LlmGateway {
+  private readonly textCache = new Map<string, string>();
   private readonly imageCache = new Map<string, Buffer>();
 
   constructor(
+    private readonly textProvider: LlmTextProvider = new MockLlmTextProvider(),
     private readonly imageProvider: LlmImageProvider = new MockLlmImageProvider(),
   ) {}
+
+  async generateText(
+    request: GenerateTextRequest,
+  ): Promise<GenerateTextResponse> {
+    const cacheKey = promptCacheKey(request.prompt);
+    const cached = this.textCache.get(cacheKey);
+    if (cached !== undefined) {
+      return {
+        markdown: cached,
+        cacheHit: true,
+        cacheKey,
+      };
+    }
+
+    const markdown = await this.textProvider.generateText(
+      normalizePrompt(request.prompt),
+    );
+    this.textCache.set(cacheKey, markdown);
+
+    return {
+      markdown,
+      cacheHit: false,
+      cacheKey,
+    };
+  }
 
   async generateImage(
     request: GenerateImageRequest,
@@ -119,15 +182,16 @@ export class LlmGateway {
   }
 
   cacheSize(): number {
-    return this.imageCache.size;
+    return this.textCache.size + this.imageCache.size;
   }
 
   clear(): void {
+    this.textCache.clear();
     this.imageCache.clear();
   }
 }
 
-/** Process-wide singleton so Worker 1 and Worker 2 share the same image cache. */
+/** Process-wide singleton so Worker 1 and Worker 2 share the same LLM caches. */
 export const llmGateway = new LlmGateway();
 
 function delay(ms: number): Promise<void> {

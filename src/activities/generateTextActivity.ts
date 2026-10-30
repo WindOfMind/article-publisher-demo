@@ -1,4 +1,5 @@
 import { log } from '@temporalio/activity';
+import { llmGateway } from '../infra/llmGateway';
 import { mockS3 } from '../infra/mockS3';
 import { metrics } from './metrics';
 
@@ -10,11 +11,15 @@ export interface GenerateTextInput {
 
 export interface GenerateTextResult {
   textS3Uri: string;
+  /** Present for observability / tests; not required by the workflow. */
+  cacheHit: boolean;
 }
 
 /**
- * Simulates an LLM call. Stores generated markdown in Mock S3 (claim-check)
- * and returns only the URI — never the raw markdown payload.
+ * Generates article markdown via the LLM gateway.
+ * The gateway normalizes + hashes the topic and serves from cache when possible
+ * so repeated prompts do not incur another billable provider call.
+ * Stores markdown in Mock S3 (claim-check) and returns only the URI.
  */
 export async function generateTextActivity(
   input: GenerateTextInput,
@@ -25,35 +30,34 @@ export async function generateTextActivity(
     topic: input.topic,
   });
 
-  metrics.llmCalls += 1;
+  const { markdown, cacheHit, cacheKey } = await llmGateway.generateText({
+    prompt: input.topic,
+  });
 
-  // Simulate a short LLM latency.
-  await delay(40);
-
-  const markdown = [
-    `# ${input.topic}`,
-    '',
-    `*Tenant:* ${input.tenantId} · *Article:* ${input.articleId}`,
-    '',
-    `This is mock SEO content about **${input.topic}**.`,
-    '',
-    '## Key takeaways',
-    '',
-    '- Point one',
-    '- Point two',
-    '- Point three',
-  ].join('\n');
+  if (cacheHit) {
+    metrics.textCacheHits += 1;
+    log.info('Text served from LLM gateway cache', {
+      articleId: input.articleId,
+      cacheKey,
+    });
+  } else {
+    metrics.llmCalls += 1;
+    log.info('Text generated via LLM provider and cached', {
+      articleId: input.articleId,
+      cacheKey,
+    });
+  }
 
   const textS3Uri = await mockS3.put(
     `articles/${input.tenantId}/${input.articleId}/content.md`,
     markdown,
   );
 
-  log.info('Article text stored', { articleId: input.articleId, textS3Uri });
+  log.info('Article text stored', {
+    articleId: input.articleId,
+    textS3Uri,
+    cacheHit,
+  });
 
-  return { textS3Uri };
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return { textS3Uri, cacheHit };
 }
