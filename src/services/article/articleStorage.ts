@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PlatformId } from '../platforms/types';
+import type { PlatformId } from '../../platforms/types';
 
 export const PUBLISH_STATUSES = ['pending', 'published', 'failed'] as const;
 

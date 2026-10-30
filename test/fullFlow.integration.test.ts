@@ -34,7 +34,14 @@ import {
 import { mockCms } from '../src/infra/mockCms';
 import { mockRateLimiter } from '../src/infra/mockRateLimiter';
 import { mockS3 } from '../src/infra/mockS3';
+import {
+  hashPrompt,
+  llmGateway,
+  normalizePrompt,
+  promptCacheKey,
+} from '../src/infra/llmGateway';
 import type { PublishedArticleUrl } from '../src/workflows';
+import type { GenerateImageResult } from '../src/activities';
 
 const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
 const BATCH_SIZE = 10;
@@ -88,6 +95,87 @@ function createSlowPlatformRegistry(delayMs: number): PlatformAdapterRegistry {
 }
 
 /**
+ * LLM gateway: normalize + hash cache key; miss calls provider once; hit skips it.
+ */
+async function assertImageGatewayCache(): Promise<void> {
+  console.log('=== LLM image gateway cache ===\n');
+
+  resetMetrics();
+  mockS3.clear();
+  llmGateway.clear();
+
+  const normalized = normalizePrompt('  SEO  Topic   One  ');
+  assert(
+    normalized === 'seo topic one',
+    `expected normalized "seo topic one", got "${normalized}"`,
+  );
+  assert(
+    promptCacheKey('SEO Topic One') === hashPrompt('seo topic one'),
+    'cache key must be sha256 of normalized prompt',
+  );
+  assert(
+    promptCacheKey('  SEO  Topic   One  ') === promptCacheKey('seo topic one'),
+    'equivalent prompts must share a cache key',
+  );
+  console.log('✓ Prompt normalize + hash cache key.');
+
+  const first = (await new MockActivityEnvironment().run(
+    activities.generateImageActivity,
+    {
+      articleId: 'img-a',
+      tenantId: 'tenant-cache',
+      topic: '  SEO  Topic   One  ',
+    },
+  )) as GenerateImageResult;
+  assert(!first.cacheHit, 'first generation must be a cache miss');
+  const callsAfterMiss = metrics.imageCalls;
+  const hitsAfterMiss = metrics.imageCacheHits;
+  assert(
+    callsAfterMiss === 1,
+    `expected imageCalls=1 after miss, got ${callsAfterMiss}`,
+  );
+  assert(
+    hitsAfterMiss === 0,
+    `expected imageCacheHits=0 after miss, got ${hitsAfterMiss}`,
+  );
+  assert(llmGateway.cacheSize() === 1, 'miss should populate gateway cache');
+  console.log('✓ Cache miss invokes mocked LLM provider once.');
+
+  const second = (await new MockActivityEnvironment().run(
+    activities.generateImageActivity,
+    {
+      articleId: 'img-b',
+      tenantId: 'tenant-cache',
+      topic: 'SEO Topic One',
+    },
+  )) as GenerateImageResult;
+  assert(
+    second.cacheHit,
+    'second generation with same topic must be a cache hit',
+  );
+  const callsAfterHit = metrics.imageCalls;
+  const hitsAfterHit = metrics.imageCacheHits;
+  assert(
+    callsAfterHit === 1,
+    `cache hit must not increment imageCalls, got ${callsAfterHit}`,
+  );
+  assert(
+    hitsAfterHit === 1,
+    `expected imageCacheHits=1 after hit, got ${hitsAfterHit}`,
+  );
+
+  const firstBytes = await mockS3.get(first.imageS3Uri);
+  const secondBytes = await mockS3.get(second.imageS3Uri);
+  assert(
+    Buffer.isBuffer(firstBytes) &&
+      Buffer.isBuffer(secondBytes) &&
+      firstBytes.equals(secondBytes),
+    'cached image bytes must match the original generation',
+  );
+  console.log('✓ Cache hit reuses bytes and skips provider (cost saved).\n');
+}
+
+/**
  * First attempt creates; retry (attempt > 1) reuses CMS records without
  * incrementing cmsUploads / cmsPublishes.
  */
@@ -98,6 +186,7 @@ async function assertRetryOnlyCmsLookup(): Promise<void> {
   mockS3.clear();
   mockCms.clear();
   mockRateLimiter.clear();
+  llmGateway.clear();
 
   const articleId = 'retry-article';
   const tenantId = 'tenant-retry';
@@ -235,6 +324,7 @@ function isLivePlatformUrl(url: string): boolean {
 */
 
 async function main(): Promise<void> {
+  await assertImageGatewayCache();
   await assertRetryOnlyCmsLookup();
 
   console.log('=== SEO Article Publisher PoC — Crash Harness ===\n');
@@ -243,6 +333,7 @@ async function main(): Promise<void> {
   mockS3.clear();
   mockCms.clear();
   mockRateLimiter.clear();
+  llmGateway.clear();
   articleStorage.clear();
 
   const env = await TestWorkflowEnvironment.createLocal();
@@ -284,10 +375,11 @@ async function main(): Promise<void> {
 
     // Intermediate progress must have been made before the crash.
     console.log('Intermediate metrics after Worker 1 crash:');
-    console.log(`  llmCalls     = ${metrics.llmCalls}`);
-    console.log(`  imageCalls   = ${metrics.imageCalls}`);
-    console.log(`  cmsUploads   = ${metrics.cmsUploads}`);
-    console.log(`  cmsPublishes = ${metrics.cmsPublishes}`);
+    console.log(`  llmCalls        = ${metrics.llmCalls}`);
+    console.log(`  imageCalls      = ${metrics.imageCalls}`);
+    console.log(`  imageCacheHits  = ${metrics.imageCacheHits}`);
+    console.log(`  cmsUploads      = ${metrics.cmsUploads}`);
+    console.log(`  cmsPublishes    = ${metrics.cmsPublishes}`);
 
     assert(
       metrics.llmCalls > 0,
@@ -404,11 +496,13 @@ async function main(): Promise<void> {
     );
 
     console.log('\nFinal metrics:');
-    console.log(`  llmCalls     = ${metrics.llmCalls}`);
-    console.log(`  imageCalls   = ${metrics.imageCalls}`);
-    console.log(`  cmsUploads   = ${metrics.cmsUploads}`);
-    console.log(`  cmsPublishes = ${metrics.cmsPublishes}`);
-    console.log(`  mockS3 objects = ${mockS3.size()}`);
+    console.log(`  llmCalls        = ${metrics.llmCalls}`);
+    console.log(`  imageCalls      = ${metrics.imageCalls}`);
+    console.log(`  imageCacheHits  = ${metrics.imageCacheHits}`);
+    console.log(`  cmsUploads      = ${metrics.cmsUploads}`);
+    console.log(`  cmsPublishes    = ${metrics.cmsPublishes}`);
+    console.log(`  mockS3 objects  = ${mockS3.size()}`);
+    console.log(`  llm image cache = ${llmGateway.cacheSize()}`);
 
     console.log('\n=== PoC PASSED ===');
   } finally {

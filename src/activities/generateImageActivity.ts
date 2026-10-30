@@ -1,4 +1,5 @@
 import { Context, log } from '@temporalio/activity';
+import { llmGateway } from '../infra/llmGateway';
 import { mockS3 } from '../infra/mockS3';
 import { metrics } from './metrics';
 
@@ -10,45 +11,15 @@ export interface GenerateImageInput {
 
 export interface GenerateImageResult {
   imageS3Uri: string;
+  /** Present for observability / tests; not required by the workflow. */
+  cacheHit: boolean;
 }
 
-/** Minimal RIFF/WEBP header bytes used as a stand-in binary payload. */
-const MOCK_WEBP: Buffer = Buffer.from([
-  0x52,
-  0x49,
-  0x46,
-  0x46, // "RIFF"
-  0x1a,
-  0x00,
-  0x00,
-  0x00, // size
-  0x57,
-  0x45,
-  0x42,
-  0x50, // "WEBP"
-  0x56,
-  0x50,
-  0x38,
-  0x20, // "VP8 "
-  0x0e,
-  0x00,
-  0x00,
-  0x00,
-  0x30,
-  0x01,
-  0x00,
-  0x9d,
-  0x01,
-  0x2a,
-  0x01,
-  0x00,
-  0x01,
-  0x00,
-]);
-
 /**
- * Simulates image generation. Heartbeats while "rendering", stores a mock
- * WebP binary in Mock S3, and returns only the claim-check URI.
+ * Generates an article hero image via the LLM gateway.
+ * The gateway normalizes + hashes the topic and serves from cache when possible
+ * so repeated prompts do not incur another billable provider call.
+ * Heartbeats while generating / copying; stores bytes in Mock S3 (claim-check).
  */
 export async function generateImageActivity(
   input: GenerateImageInput,
@@ -59,26 +30,39 @@ export async function generateImageActivity(
     topic: input.topic,
   });
 
-  metrics.imageCalls += 1;
-
   const ctx = Context.current();
+  ctx.heartbeat({ phase: 'gateway', topic: input.topic });
 
-  // Pulse heartbeats while simulating a longer-running image job.
-  for (let i = 0; i < 3; i++) {
-    ctx.heartbeat({ phase: 'render', step: i + 1, topic: input.topic });
-    await delay(30);
+  const { imageBytes, cacheHit, cacheKey } = await llmGateway.generateImage({
+    prompt: input.topic,
+  });
+
+  if (cacheHit) {
+    metrics.imageCacheHits += 1;
+    log.info('Image served from LLM gateway cache', {
+      articleId: input.articleId,
+      cacheKey,
+    });
+  } else {
+    metrics.imageCalls += 1;
+    log.info('Image generated via LLM provider and cached', {
+      articleId: input.articleId,
+      cacheKey,
+    });
   }
+
+  ctx.heartbeat({ phase: 'store', cacheHit, cacheKey });
 
   const imageS3Uri = await mockS3.put(
     `articles/${input.tenantId}/${input.articleId}/hero.webp`,
-    Buffer.from(MOCK_WEBP),
+    Buffer.from(imageBytes),
   );
 
-  log.info('Article image stored', { articleId: input.articleId, imageS3Uri });
+  log.info('Article image stored', {
+    articleId: input.articleId,
+    imageS3Uri,
+    cacheHit,
+  });
 
-  return { imageS3Uri };
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return { imageS3Uri, cacheHit };
 }

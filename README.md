@@ -10,7 +10,7 @@ Diagram: https://excalidraw.com/#json=BvfLeXX9qyqCkJ7rWQAcg,PKqk1F-vFp02OC4tAfLe
 Article (platforms[]) -> Text (LLM) ∥ Image → per platform: Media Upload → Publish
 ```
 
-1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: mock render with heartbeats; stores WebP in Mock S3; returns `imageS3Uri`.
+1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: goes through the **LLM gateway** (normalize topic → SHA-256 cache key → cache hit or mocked provider); stores WebP in Mock S3; returns `imageS3Uri`. Repeated / equivalent prompts skip the provider and do not increment `imageCalls`.
 2. **uploadCmsMediaActivity** — for each platform in the request/config, fetches image from Mock S3 and uploads via that platform's adaptor; returns `cmsMediaId`. On retry (`attempt > 1`), looks up existing CMS media first so a prior success that failed to report does not upload again.
 3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants on that platform). Publishes via the same adaptor. On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries. On retry (`attempt > 1`), looks up an existing post first (before rate-limit tokens) and returns its `liveUrl` when found.
 4. **recordArticlePublishActivity** — saves per-platform outcome (`published` + `liveUrl`, or `failed`) via `ArticleService.savePublishResult`. `ArticleService.publishArticle` seeds entries as `pending` when the workflow starts.
@@ -41,6 +41,7 @@ src/
     mockS3.ts            # In-memory Map store (claim-check)
     mockCms.ts           # In-memory media/post records for retry lookup
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
+    llmGateway.ts        # Normalize/hash prompt cache + mocked image provider
   services/
     article/
       articleService.ts     # Control layer: start workflow + read publish history
@@ -54,7 +55,7 @@ src/
     uploadCmsMediaActivity.ts
     publishCmsPostActivity.ts
     recordArticlePublishActivity.ts
-    metrics.ts           # llmCalls / imageCalls / cmsUploads / cmsPublishes
+    metrics.ts           # llmCalls / imageCalls / imageCacheHits / cmsUploads / cmsPublishes
   workflows/
     articleWorkflow.ts   # Orchestration; publish rate limits via activity retries
 test/
