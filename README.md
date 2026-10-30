@@ -11,8 +11,8 @@ Article (platforms[]) -> Text (LLM) ∥ Image → per platform: Media Upload →
 ```
 
 1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: mock render with heartbeats; stores WebP in Mock S3; returns `imageS3Uri`.
-2. **uploadCmsMediaActivity** — for each platform in the request/config, fetches image from Mock S3 and uploads via that platform's adaptor; returns `cmsMediaId`.
-3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants on that platform). Publishes via the same adaptor. On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries.
+2. **uploadCmsMediaActivity** — for each platform in the request/config, fetches image from Mock S3 and uploads via that platform's adaptor; returns `cmsMediaId`. On retry (`attempt > 1`), looks up existing CMS media first so a prior success that failed to report does not upload again.
+3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants on that platform). Publishes via the same adaptor. On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries. On retry (`attempt > 1`), looks up an existing post first (before rate-limit tokens) and returns its `liveUrl` when found.
 
 The same generated content is reused across every target platform. Large payloads never travel through Temporal activity return values — only S3 URIs and CMS IDs do.
 
@@ -38,6 +38,7 @@ src/
     registry.ts          # Lookup adaptor by platform
   infra/
     mockS3.ts            # In-memory Map store (claim-check)
+    mockCms.ts           # In-memory media/post records for retry lookup
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
   services/
     articleService.ts    # Control layer: start articleWorkflow per tenant

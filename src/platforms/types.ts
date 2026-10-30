@@ -38,6 +38,11 @@ export interface UploadMediaResult {
   cmsMediaId: string;
 }
 
+export interface FindMediaParams {
+  articleId: string;
+  tenantId: string;
+}
+
 export interface PublishPostParams {
   articleId: string;
   tenantId: string;
@@ -50,12 +55,20 @@ export interface PublishPostResult {
   liveUrl: string;
 }
 
+export interface FindPostParams {
+  articleId: string;
+  tenantId: string;
+}
+
 /**
  * Per-platform adaptor: upload media and publish a post.
  * Demo adapters are mocks; real ones would call Shopify/Wix APIs.
+ * findMedia / findPost support retry-only idempotency in activities.
  */
 export interface PlatformAdapter {
   readonly platformId: PlatformId;
   uploadMedia(params: UploadMediaParams): Promise<UploadMediaResult>;
+  findMedia(params: FindMediaParams): Promise<UploadMediaResult | null>;
   publishPost(params: PublishPostParams): Promise<PublishPostResult>;
+  findPost(params: FindPostParams): Promise<PublishPostResult | null>;
 }

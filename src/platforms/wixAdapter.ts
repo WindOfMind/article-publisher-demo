@@ -1,4 +1,7 @@
+import { mockCms } from '../infra/mockCms';
 import type {
+  FindMediaParams,
+  FindPostParams,
   PlatformAdapter,
   PublishPostParams,
   PublishPostResult,
@@ -21,17 +24,28 @@ function byteLength(imageData: Buffer | string): number {
 
 /** Mock Wix Blog adaptor. */
 export function createWixAdapter(): PlatformAdapter {
+  const platformId = 'wix' as const;
+
   return {
-    platformId: 'wix',
+    platformId,
 
     async uploadMedia({
       articleId,
       tenantId,
       imageData,
     }: UploadMediaParams): Promise<UploadMediaResult> {
-      return {
+      const result: UploadMediaResult = {
         cmsMediaId: `wix-media-${tenantId}-${articleId}-${byteLength(imageData)}`,
       };
+      mockCms.putMedia({ platformId, tenantId, articleId }, result);
+      return result;
+    },
+
+    async findMedia({
+      articleId,
+      tenantId,
+    }: FindMediaParams): Promise<UploadMediaResult | null> {
+      return mockCms.findMedia({ platformId, tenantId, articleId });
     },
 
     async publishPost({
@@ -41,9 +55,18 @@ export function createWixAdapter(): PlatformAdapter {
       cmsMediaId,
     }: PublishPostParams): Promise<PublishPostResult> {
       const slug = slugify(topic);
-      return {
+      const result: PublishPostResult = {
         liveUrl: `https://${tenantId}.wixsite.com/blog/${slug}-${articleId}?media=${cmsMediaId}`,
       };
+      mockCms.putPost({ platformId, tenantId, articleId }, result);
+      return result;
+    },
+
+    async findPost({
+      articleId,
+      tenantId,
+    }: FindPostParams): Promise<PublishPostResult | null> {
+      return mockCms.findPost({ platformId, tenantId, articleId });
     },
   };
 }

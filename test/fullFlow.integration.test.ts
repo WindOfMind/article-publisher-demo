@@ -1,10 +1,16 @@
 import { Context } from '@temporalio/activity';
-import { TestWorkflowEnvironment } from '@temporalio/testing';
+import {
+  MockActivityEnvironment,
+  TestWorkflowEnvironment,
+} from '@temporalio/testing';
 import { Worker } from '@temporalio/worker';
 import {
+  createPublishCmsPostActivity,
   createUploadCmsMediaActivity,
   metrics,
   resetMetrics,
+  type PublishCmsPostResult,
+  type UploadCmsMediaResult,
 } from '../src/activities';
 import * as activities from '../src/activities';
 import {
@@ -14,12 +20,16 @@ import {
 import {
   PLATFORM_IDS,
   createDefaultPlatformRegistry,
+  type FindMediaParams,
+  type FindPostParams,
   type PlatformAdapter,
   type PlatformAdapterRegistry,
   type PlatformId,
+  type PublishPostParams,
   type UploadMediaParams,
   type UploadMediaResult,
 } from '../src/platforms';
+import { mockCms } from '../src/infra/mockCms';
 import { mockRateLimiter } from '../src/infra/mockRateLimiter';
 import { mockS3 } from '../src/infra/mockS3';
 import type {
@@ -71,11 +81,93 @@ function createSlowPlatformRegistry(delayMs: number): PlatformAdapterRegistry {
         await cancellableDelay(delayMs);
         return adapter.uploadMedia(params);
       },
-      publishPost: (params) => adapter.publishPost(params),
+      findMedia: (params: FindMediaParams) => adapter.findMedia(params),
+      publishPost: (params: PublishPostParams) => adapter.publishPost(params),
+      findPost: (params: FindPostParams) => adapter.findPost(params),
     });
   }
 
   return slow;
+}
+
+/**
+ * First attempt creates; retry (attempt > 1) reuses CMS records without
+ * incrementing cmsUploads / cmsPublishes.
+ */
+async function assertRetryOnlyCmsLookup(): Promise<void> {
+  console.log('=== Retry-only CMS existence check ===\n');
+
+  resetMetrics();
+  mockS3.clear();
+  mockCms.clear();
+  mockRateLimiter.clear();
+
+  const articleId = 'retry-article';
+  const tenantId = 'tenant-retry';
+  const platform = 'shopify' as const;
+  const topic = 'Retry Topic';
+
+  const imageS3Uri = await mockS3.put(
+    `${tenantId}/${articleId}/image.webp`,
+    Buffer.from('webp'),
+  );
+  const textS3Uri = await mockS3.put(
+    `${tenantId}/${articleId}/article.md`,
+    '# Retry Topic\n\nBody.',
+  );
+
+  const upload = createUploadCmsMediaActivity();
+  const publish = createPublishCmsPostActivity();
+  const uploadInput = { articleId, tenantId, platform, imageS3Uri };
+  const firstUpload = (await new MockActivityEnvironment({
+    attempt: 1,
+  }).run(upload, uploadInput)) as UploadCmsMediaResult;
+  assert(
+    metrics.cmsUploads === 1,
+    `expected cmsUploads=1 after first upload, got ${metrics.cmsUploads}`,
+  );
+
+  const retryUpload = (await new MockActivityEnvironment({
+    attempt: 2,
+  }).run(upload, uploadInput)) as UploadCmsMediaResult;
+  assert(
+    retryUpload.cmsMediaId === firstUpload.cmsMediaId,
+    `retry upload should reuse media id ${firstUpload.cmsMediaId}, got ${retryUpload.cmsMediaId}`,
+  );
+  assert(
+    metrics.cmsUploads === 1,
+    `retry upload must not increment cmsUploads, got ${metrics.cmsUploads}`,
+  );
+  console.log('✓ Upload retry reuses existing cmsMediaId without re-upload.');
+
+  const publishInput = {
+    articleId,
+    tenantId,
+    platform,
+    topic,
+    textS3Uri,
+    cmsMediaId: firstUpload.cmsMediaId,
+  };
+  const firstPublish = (await new MockActivityEnvironment({
+    attempt: 1,
+  }).run(publish, publishInput)) as PublishCmsPostResult;
+  assert(
+    metrics.cmsPublishes === 1,
+    `expected cmsPublishes=1 after first publish, got ${metrics.cmsPublishes}`,
+  );
+
+  const retryPublish = (await new MockActivityEnvironment({
+    attempt: 2,
+  }).run(publish, publishInput)) as PublishCmsPostResult;
+  assert(
+    retryPublish.liveUrl === firstPublish.liveUrl,
+    `retry publish should reuse liveUrl ${firstPublish.liveUrl}, got ${retryPublish.liveUrl}`,
+  );
+  assert(
+    metrics.cmsPublishes === 1,
+    `retry publish must not increment cmsPublishes, got ${metrics.cmsPublishes}`,
+  );
+  console.log('✓ Publish retry reuses existing liveUrl without re-publish.\n');
 }
 
 async function cancellableDelay(ms: number): Promise<void> {
@@ -146,10 +238,13 @@ function isLivePlatformUrl(url: string): boolean {
 */
 
 async function main(): Promise<void> {
+  await assertRetryOnlyCmsLookup();
+
   console.log('=== SEO Article Publisher PoC — Crash Harness ===\n');
 
   resetMetrics();
   mockS3.clear();
+  mockCms.clear();
   mockRateLimiter.clear();
 
   const env = await TestWorkflowEnvironment.createLocal();

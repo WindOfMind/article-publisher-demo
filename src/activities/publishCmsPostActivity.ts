@@ -1,4 +1,4 @@
-import { log } from '@temporalio/activity';
+import { Context, log } from '@temporalio/activity';
 import { ApplicationFailure } from '@temporalio/common';
 import {
   createDefaultPlatformRegistry,
@@ -43,6 +43,9 @@ function platformKey(platformId: PlatformId): string {
  *
  * On exhaustion throws a retryable ApplicationFailure with nextRetryDelay so
  * Temporal's activity Retry Policy backs off and retries (Delayed Retry).
+ *
+ * On retry (attempt > 1), looks up an existing post first so a prior success
+ * that failed to report does not create a duplicate or consume rate-limit tokens.
  */
 export function createPublishCmsPostActivity(
   registry: PlatformAdapterRegistry = createDefaultPlatformRegistry(),
@@ -50,12 +53,33 @@ export function createPublishCmsPostActivity(
   return async function publishCmsPostActivity(
     input: PublishCmsPostInput,
   ): Promise<PublishCmsPostResult> {
+    const { attempt } = Context.current().info;
+
     log.info('Publishing CMS post', {
       articleId: input.articleId,
       tenantId: input.tenantId,
       platform: input.platform,
       cmsMediaId: input.cmsMediaId,
+      attempt,
     });
+
+    const adapter = getPlatformAdapter(input.platform, registry);
+
+    if (attempt > 1) {
+      const existing = await adapter.findPost({
+        articleId: input.articleId,
+        tenantId: input.tenantId,
+      });
+      if (existing) {
+        log.info('Reusing existing CMS post after retry', {
+          articleId: input.articleId,
+          platform: input.platform,
+          liveUrl: existing.liveUrl,
+          attempt,
+        });
+        return existing;
+      }
+    }
 
     const tKey = tenantKey(input.tenantId);
     const pKey = platformKey(input.platform);
@@ -108,7 +132,6 @@ export function createPublishCmsPostActivity(
       });
     }
 
-    const adapter = getPlatformAdapter(input.platform, registry);
     const result = await adapter.publishPost({
       articleId: input.articleId,
       tenantId: input.tenantId,

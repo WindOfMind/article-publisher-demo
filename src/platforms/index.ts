@@ -1,4 +1,6 @@
 export type {
+  FindMediaParams,
+  FindPostParams,
   PlatformAdapter,
   PlatformId,
   PublishPostParams,
