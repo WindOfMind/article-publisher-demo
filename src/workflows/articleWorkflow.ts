@@ -1,4 +1,9 @@
-import { log, proxyActivities } from '@temporalio/workflow';
+import {
+  ActivityFailure,
+  isCancellation,
+  log,
+  proxyActivities,
+} from '@temporalio/workflow';
 import type { PlatformId } from '../platforms/types';
 import type * as activities from '../activities';
 
@@ -44,6 +49,34 @@ const { publishCmsPostActivity } = proxyActivities<typeof activities>({
     maximumAttempts: Number.POSITIVE_INFINITY,
   },
 });
+
+/**
+ * Persist `failed` only after Temporal has given up on the activity:
+ * retries exhausted, or a non-retryable / terminal ApplicationFailure.
+ * Skip cancellations (worker restart, workflow cancel) — those are not publish outcomes.
+ */
+function shouldRecordPublishFailure(err: unknown): boolean {
+  if (isCancellation(err)) {
+    return false;
+  }
+  if (!(err instanceof ActivityFailure)) {
+    return false;
+  }
+  return (
+    err.retryState === 'MAXIMUM_ATTEMPTS_REACHED' ||
+    err.retryState === 'NON_RETRYABLE_FAILURE'
+  );
+}
+
+function failureMessage(err: unknown): string {
+  if (err instanceof ActivityFailure && err.cause instanceof Error) {
+    return err.cause.message;
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
 
 /**
  * Orchestrates Text ∥ Image → per-platform (Media Upload → Publish).
@@ -104,14 +137,15 @@ export async function articleWorkflow(
           cmsMediaId,
         }));
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        await recordArticlePublishActivity({
-          articleId: input.articleId,
-          tenantId: input.tenantId,
-          platform,
-          status: 'failed',
-          error: message,
-        });
+        if (shouldRecordPublishFailure(err)) {
+          await recordArticlePublishActivity({
+            articleId: input.articleId,
+            tenantId: input.tenantId,
+            platform,
+            status: 'failed',
+            error: failureMessage(err),
+          });
+        }
         throw err;
       }
 
