@@ -2,7 +2,7 @@ import type { Client } from '@temporalio/client';
 import {
   articleWorkflow,
   type ArticleWorkflowInput,
-} from '../workflows/articleWorkflow';
+} from '../../workflows/articleWorkflow';
 import {
   articleStorage,
   type ArticlePublishHistory,

@@ -5,7 +5,7 @@ import express, {
   type Response,
 } from 'express';
 import { PLATFORM_IDS, normalizePlatformIds } from '../platforms';
-import type { ArticleService } from '../services/articleService';
+import type { ArticleService } from '../services/article/articleService';
 
 function tenantIdFromParams(req: Request): string {
   const tenantIdParam = req.params.tenantId;

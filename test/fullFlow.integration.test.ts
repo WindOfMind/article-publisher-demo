@@ -17,8 +17,8 @@ import {
   ArticleService,
   DEFAULT_ARTICLE_TASK_QUEUE,
   type PublishArticleInput,
-} from '../src/services/articleService';
-import { articleStorage } from '../src/services/articleStorage';
+} from '../src/services/article/articleService';
+import { articleStorage } from '../src/services/article/articleStorage';
 import {
   PLATFORM_IDS,
   createDefaultPlatformRegistry,

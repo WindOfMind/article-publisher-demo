@@ -2,7 +2,7 @@ import { Client, Connection } from '@temporalio/client';
 import {
   ArticleService,
   DEFAULT_ARTICLE_TASK_QUEUE,
-} from '../services/articleService';
+} from '../services/article/articleService';
 import { createPublishServer } from './publishServer';
 
 /**

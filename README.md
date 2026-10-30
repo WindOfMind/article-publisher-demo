@@ -42,8 +42,9 @@ src/
     mockCms.ts           # In-memory media/post records for retry lookup
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
   services/
-    articleService.ts       # Control layer: start workflow + read publish history
-    articleStorage.ts       # In-memory platform/URL/status history
+    article/
+      articleService.ts     # Control layer: start workflow + read publish history
+      articleStorage.ts     # In-memory platform/URL/status history
   server/
     publishServer.ts     # Express POST + GET /tenants/:tenantId/articles
     main.ts              # Connect Temporal client + listen (PORT=3000)

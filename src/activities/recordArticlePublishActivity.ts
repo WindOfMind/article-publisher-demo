@@ -3,8 +3,8 @@ import type { PlatformId } from '../platforms/types';
 import {
   articlePublishPersistence,
   type ArticleService,
-} from '../services/articleService';
-import type { PublishStatus } from '../services/articleStorage';
+} from '../services/article/articleService';
+import type { PublishStatus } from '../services/article/articleStorage';
 
 export interface RecordArticlePublishInput {
   articleId: string;
