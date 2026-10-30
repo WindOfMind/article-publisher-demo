@@ -13,6 +13,7 @@ Article (platforms[]) -> Text (LLM) ∥ Image → per platform: Media Upload →
 1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Text: mock LLM call; stores markdown in Mock S3; returns `textS3Uri` (claim-check). Image: mock render with heartbeats; stores WebP in Mock S3; returns `imageS3Uri`.
 2. **uploadCmsMediaActivity** — for each platform in the request/config, fetches image from Mock S3 and uploads via that platform's adaptor; returns `cmsMediaId`. On retry (`attempt > 1`), looks up existing CMS media first so a prior success that failed to report does not upload again.
 3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants on that platform). Publishes via the same adaptor. On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries. On retry (`attempt > 1`), looks up an existing post first (before rate-limit tokens) and returns its `liveUrl` when found.
+4. **recordArticlePublishActivity** — saves per-platform outcome (`published` + `liveUrl`, or `failed`) via `ArticleService.savePublishResult`. `ArticleService.publishArticle` seeds entries as `pending` when the workflow starts.
 
 The same generated content is reused across every target platform. Large payloads never travel through Temporal activity return values — only S3 URIs and CMS IDs do.
 
@@ -41,15 +42,17 @@ src/
     mockCms.ts           # In-memory media/post records for retry lookup
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
   services/
-    articleService.ts    # Control layer: start articleWorkflow per tenant
+    articleService.ts       # Control layer: start workflow + read publish history
+    articleStorage.ts       # In-memory platform/URL/status history
   server/
-    publishServer.ts     # Express POST /tenants/:tenantId/articles
+    publishServer.ts     # Express POST + GET /tenants/:tenantId/articles
     main.ts              # Connect Temporal client + listen (PORT=3000)
   activities/
     generateTextActivity.ts
     generateImageActivity.ts
     uploadCmsMediaActivity.ts
     publishCmsPostActivity.ts
+    recordArticlePublishActivity.ts
     metrics.ts           # llmCalls / imageCalls / cmsUploads / cmsPublishes
   workflows/
     articleWorkflow.ts   # Orchestration; publish rate limits via activity retries
@@ -81,6 +84,8 @@ npm run publish:server   # POST http://localhost:3000/tenants/:tenantId/articles
 ```
 
 Body: `{ "articleId": "article-01", "topic": "SEO Topic 1", "platforms": ["shopify", "wix"] }` → `202` `{ workflowId, runId }`.
+
+`GET /tenants/:tenantId/articles/:articleId` → `200` publish history (`entries[].platform`, `liveUrl`, `status`: `pending` | `published` | `failed`) or `404`.
 
 `platforms` is a non-empty array of `shopify` and/or `wix`. One workflow generates content once and publishes to every listed platform.
 

@@ -7,10 +7,26 @@ import express, {
 import { PLATFORM_IDS, normalizePlatformIds } from '../platforms';
 import type { ArticleService } from '../services/articleService';
 
+function tenantIdFromParams(req: Request): string {
+  const tenantIdParam = req.params.tenantId;
+  return Array.isArray(tenantIdParam)
+    ? (tenantIdParam[0] ?? '')
+    : (tenantIdParam ?? '');
+}
+
+function articleIdFromParams(req: Request): string {
+  const articleIdParam = req.params.articleId;
+  return Array.isArray(articleIdParam)
+    ? (articleIdParam[0] ?? '')
+    : (articleIdParam ?? '');
+}
+
 /**
  * Thin Express control surface that imitates an app layer driving article publish.
  * POST /tenants/:tenantId/articles
- *   { articleId, topic, platforms: ["shopify","wix"] } → 202 { workflowId, runId }
+ *   { topic, platforms: ["shopify","wix"] } → 202 { articleId, workflowId, runId }
+ * GET /tenants/:tenantId/articles/:articleId
+ *   → 200 publish history (platform, liveUrl, status) or 404
  */
 export function createPublishServer(articleService: ArticleService): Express {
   const app = express();
@@ -20,10 +36,7 @@ export function createPublishServer(articleService: ArticleService): Express {
     '/tenants/:tenantId/articles',
     async (req: Request, res: Response) => {
       try {
-        const tenantIdParam = req.params.tenantId;
-        const tenantId = Array.isArray(tenantIdParam)
-          ? (tenantIdParam[0] ?? '')
-          : (tenantIdParam ?? '');
+        const tenantId = tenantIdFromParams(req);
         const body = req.body as unknown;
 
         if (body === null || typeof body !== 'object' || Array.isArray(body)) {
@@ -31,16 +44,10 @@ export function createPublishServer(articleService: ArticleService): Express {
           return;
         }
 
-        const { articleId, topic, platforms: platformsRaw } = body as Record<
+        const { topic, platforms: platformsRaw } = body as Record<
           string,
           unknown
         >;
-        if (typeof articleId !== 'string' || articleId.trim().length === 0) {
-          res
-            .status(400)
-            .json({ error: 'articleId is required (non-empty string)' });
-          return;
-        }
         if (typeof topic !== 'string' || topic.trim().length === 0) {
           res.status(400).json({ error: 'topic is required (non-empty string)' });
           return;
@@ -61,7 +68,6 @@ export function createPublishServer(articleService: ArticleService): Express {
 
         const result = await articleService.publishArticle({
           tenantId,
-          articleId,
           platforms,
           topic,
         });
@@ -71,6 +77,27 @@ export function createPublishServer(articleService: ArticleService): Express {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    },
+  );
+
+  app.get(
+    '/tenants/:tenantId/articles/:articleId',
+    (req: Request, res: Response) => {
+      const tenantId = tenantIdFromParams(req);
+      const articleId = articleIdFromParams(req);
+      if (tenantId.trim().length === 0 || articleId.trim().length === 0) {
+        res.status(400).json({
+          error: 'tenantId and articleId are required (non-empty strings)',
+        });
+        return;
+      }
+
+      const history = articleService.getPublishHistory(tenantId, articleId);
+      if (!history) {
+        res.status(404).json({ error: 'Article publish history not found' });
+        return;
+      }
+      res.status(200).json(history);
     },
   );
 

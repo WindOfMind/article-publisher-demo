@@ -29,8 +29,9 @@ async function main(): Promise<void> {
     `Publish API listening on http://localhost:${port} (taskQueue=${taskQueue}, namespace=${namespace}, address=${address})`,
   );
   console.log(
-    'POST /tenants/:tenantId/articles  { "articleId": "...", "topic": "..." }',
+    'POST /tenants/:tenantId/articles  { "topic": "...", "platforms": ["shopify","wix"] }',
   );
+  console.log('GET  /tenants/:tenantId/articles/:articleId  → publish history');
 }
 
 main().catch((err: unknown) => {

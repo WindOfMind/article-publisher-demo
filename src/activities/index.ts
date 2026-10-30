@@ -30,3 +30,12 @@ export type {
   PublishCmsPostInput,
   PublishCmsPostResult,
 } from './publishCmsPostActivity';
+
+export {
+  createRecordArticlePublishActivity,
+  recordArticlePublishActivity,
+} from './recordArticlePublishActivity';
+export type {
+  RecordArticlePublishInput,
+  RecordArticlePublishResult,
+} from './recordArticlePublishActivity';

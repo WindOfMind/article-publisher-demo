@@ -16,7 +16,9 @@ import * as activities from '../src/activities';
 import {
   ArticleService,
   DEFAULT_ARTICLE_TASK_QUEUE,
+  type PublishArticleInput,
 } from '../src/services/articleService';
+import { articleStorage } from '../src/services/articleStorage';
 import {
   PLATFORM_IDS,
   createDefaultPlatformRegistry,
@@ -32,10 +34,7 @@ import {
 import { mockCms } from '../src/infra/mockCms';
 import { mockRateLimiter } from '../src/infra/mockRateLimiter';
 import { mockS3 } from '../src/infra/mockS3';
-import type {
-  ArticleWorkflowInput,
-  PublishedArticleUrl,
-} from '../src/workflows';
+import type { PublishedArticleUrl } from '../src/workflows';
 
 const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
 const BATCH_SIZE = 10;
@@ -53,12 +52,10 @@ function assert(condition: boolean, message: string): asserts condition {
   }
 }
 
-function buildBatch(): ArticleWorkflowInput[] {
+function buildBatch(): PublishArticleInput[] {
   return Array.from({ length: BATCH_SIZE }, (_, i) => {
     const tenantId = TENANTS[i % TENANTS.length]!;
-    const articleId = `article-${String(i + 1).padStart(2, '0')}`;
     return {
-      articleId,
       tenantId,
       platforms: [...ARTICLE_PLATFORMS],
       topic: `SEO Topic ${i + 1}`,
@@ -246,6 +243,7 @@ async function main(): Promise<void> {
   mockS3.clear();
   mockCms.clear();
   mockRateLimiter.clear();
+  articleStorage.clear();
 
   const env = await TestWorkflowEnvironment.createLocal();
 
@@ -369,6 +367,40 @@ async function main(): Promise<void> {
     );
     console.log(
       `✓ metrics.cmsPublishes === ${EXPECTED_PUBLISHES} (${BATCH_SIZE} × ${ARTICLE_PLATFORMS.length} platforms)`,
+    );
+
+    for (const [i, startedItem] of started.entries()) {
+      const input = batch[i]!;
+      const history = articleService.getPublishHistory(
+        input.tenantId,
+        startedItem.articleId,
+      );
+      assert(
+        history !== null,
+        `missing publish history for ${input.tenantId}/${startedItem.articleId}`,
+      );
+      assert(
+        history.entries.length === ARTICLE_PLATFORMS.length,
+        `history ${startedItem.articleId} expected ${ARTICLE_PLATFORMS.length} entries, got ${history.entries.length}`,
+      );
+      for (const platform of ARTICLE_PLATFORMS) {
+        const entry = history.entries.find((e) => e.platform === platform);
+        assert(
+          entry !== undefined,
+          `history ${startedItem.articleId} missing platform ${platform}`,
+        );
+        assert(
+          entry.status === 'published',
+          `history ${startedItem.articleId}/${platform} status=${entry.status}, expected published`,
+        );
+        assert(
+          entry.liveUrl !== null && isLivePlatformUrl(entry.liveUrl),
+          `history ${startedItem.articleId}/${platform} missing live URL: ${String(entry.liveUrl)}`,
+        );
+      }
+    }
+    console.log(
+      `✓ ArticleService publish history recorded for all ${BATCH_SIZE} articles (${ARTICLE_PLATFORMS.join(' + ')}).`,
     );
 
     console.log('\nFinal metrics:');

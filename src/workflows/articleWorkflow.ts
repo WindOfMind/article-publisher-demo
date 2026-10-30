@@ -18,16 +18,20 @@ export interface PublishedArticleUrl {
   liveUrl: string;
 }
 
-const { generateTextActivity, generateImageActivity, uploadCmsMediaActivity } =
-  proxyActivities<typeof activities>({
-    startToCloseTimeout: '2 minutes',
-    heartbeatTimeout: '30 seconds',
-    retry: {
-      initialInterval: '1 second',
-      backoffCoefficient: 2,
-      maximumAttempts: 5,
-    },
-  });
+const {
+  generateTextActivity,
+  generateImageActivity,
+  uploadCmsMediaActivity,
+  recordArticlePublishActivity,
+} = proxyActivities<typeof activities>({
+  startToCloseTimeout: '2 minutes',
+  heartbeatTimeout: '30 seconds',
+  retry: {
+    initialInterval: '1 second',
+    backoffCoefficient: 2,
+    maximumAttempts: 5,
+  },
+});
 
 /** Publish uses Temporal activity retries for rate limits (nextRetryDelay). */
 const { publishCmsPostActivity } = proxyActivities<typeof activities>({
@@ -82,20 +86,41 @@ export async function articleWorkflow(
         platform,
       });
 
-      const { cmsMediaId } = await uploadCmsMediaActivity({
-        articleId: input.articleId,
-        tenantId: input.tenantId,
-        platform,
-        imageS3Uri,
-      });
+      let liveUrl: string;
+      try {
+        const { cmsMediaId } = await uploadCmsMediaActivity({
+          articleId: input.articleId,
+          tenantId: input.tenantId,
+          platform,
+          imageS3Uri,
+        });
 
-      const { liveUrl } = await publishCmsPostActivity({
+        ({ liveUrl } = await publishCmsPostActivity({
+          articleId: input.articleId,
+          tenantId: input.tenantId,
+          platform,
+          topic: input.topic,
+          textS3Uri,
+          cmsMediaId,
+        }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        await recordArticlePublishActivity({
+          articleId: input.articleId,
+          tenantId: input.tenantId,
+          platform,
+          status: 'failed',
+          error: message,
+        });
+        throw err;
+      }
+
+      await recordArticlePublishActivity({
         articleId: input.articleId,
         tenantId: input.tenantId,
         platform,
-        topic: input.topic,
-        textS3Uri,
-        cmsMediaId,
+        status: 'published',
+        liveUrl,
       });
 
       log.info('Published to platform', {
