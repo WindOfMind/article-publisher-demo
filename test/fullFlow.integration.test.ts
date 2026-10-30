@@ -20,8 +20,8 @@ import {
   type UploadMediaParams,
   type UploadMediaResult,
 } from '../src/platforms';
-import { mockRateLimiter } from '../src/services/mockRateLimiter';
-import { mockS3 } from '../src/services/mockS3';
+import { mockRateLimiter } from '../src/infra/mockRateLimiter';
+import { mockS3 } from '../src/infra/mockS3';
 import type {
   ArticleWorkflowInput,
   PublishedArticleUrl,

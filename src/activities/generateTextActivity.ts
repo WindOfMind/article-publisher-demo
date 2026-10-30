@@ -1,5 +1,5 @@
 import { log } from '@temporalio/activity';
-import { mockS3 } from '../services/mockS3';
+import { mockS3 } from '../infra/mockS3';
 import { metrics } from './metrics';
 
 export interface GenerateTextInput {

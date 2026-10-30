@@ -36,10 +36,11 @@ src/
     shopifyAdapter.ts    # Mock Shopify blog adaptor
     wixAdapter.ts        # Mock Wix blog adaptor
     registry.ts          # Lookup adaptor by platform
-  services/
-    articleService.ts    # Control layer: start articleWorkflow per tenant
+  infra/
     mockS3.ts            # In-memory Map store (claim-check)
     mockRateLimiter.ts   # Token buckets keyed by tenant + platform
+  services/
+    articleService.ts    # Control layer: start articleWorkflow per tenant
   server/
     publishServer.ts     # Express POST /tenants/:tenantId/articles
     main.ts              # Connect Temporal client + listen (PORT=3000)

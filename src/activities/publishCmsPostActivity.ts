@@ -6,8 +6,8 @@ import {
   type PlatformAdapterRegistry,
   type PlatformId,
 } from '../platforms';
-import { mockRateLimiter } from '../services/mockRateLimiter';
-import { mockS3 } from '../services/mockS3';
+import { mockRateLimiter } from '../infra/mockRateLimiter';
+import { mockS3 } from '../infra/mockS3';
 import { metrics } from './metrics';
 
 export interface PublishCmsPostInput {

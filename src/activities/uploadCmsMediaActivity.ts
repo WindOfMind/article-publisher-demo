@@ -5,7 +5,7 @@ import {
   type PlatformAdapterRegistry,
   type PlatformId,
 } from '../platforms';
-import { mockS3 } from '../services/mockS3';
+import { mockS3 } from '../infra/mockS3';
 import { metrics } from './metrics';
 
 export interface UploadCmsMediaInput {
