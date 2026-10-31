@@ -1,4 +1,5 @@
 import { mockCms } from '../infra/mockCms';
+import { platformCall } from './platformCall';
 import type {
   FindMediaParams,
   FindPostParams,
@@ -34,18 +35,26 @@ export function createShopifyAdapter(): PlatformAdapter {
       tenantId,
       imageData,
     }: UploadMediaParams): Promise<UploadMediaResult> {
-      const result: UploadMediaResult = {
-        cmsMediaId: `shopify-media-${tenantId}-${articleId}-${byteLength(imageData)}`,
-      };
-      mockCms.putMedia({ platformId, tenantId, articleId }, result);
-      return result;
+      return platformCall(
+        { platformId, operation: 'uploadMedia', articleId, tenantId },
+        async () => {
+          const result: UploadMediaResult = {
+            cmsMediaId: `shopify-media-${tenantId}-${articleId}-${byteLength(imageData)}`,
+          };
+          mockCms.putMedia({ platformId, tenantId, articleId }, result);
+          return result;
+        },
+      );
     },
 
     async findMedia({
       articleId,
       tenantId,
     }: FindMediaParams): Promise<UploadMediaResult | null> {
-      return mockCms.findMedia({ platformId, tenantId, articleId });
+      return platformCall(
+        { platformId, operation: 'findMedia', articleId, tenantId },
+        async () => mockCms.findMedia({ platformId, tenantId, articleId }),
+      );
     },
 
     /**
@@ -59,19 +68,27 @@ export function createShopifyAdapter(): PlatformAdapter {
       topic,
       cmsMediaId,
     }: PublishPostParams): Promise<PublishPostResult> {
-      const slug = slugify(topic);
-      const result: PublishPostResult = {
-        liveUrl: `https://${tenantId}.myshopify.com/blogs/news/${slug}-${articleId}?media=${cmsMediaId}`,
-      };
-      mockCms.putPost({ platformId, tenantId, articleId }, result);
-      return result;
+      return platformCall(
+        { platformId, operation: 'publishPost', articleId, tenantId },
+        async () => {
+          const slug = slugify(topic);
+          const result: PublishPostResult = {
+            liveUrl: `https://${tenantId}.myshopify.com/blogs/news/${slug}-${articleId}?media=${cmsMediaId}`,
+          };
+          mockCms.putPost({ platformId, tenantId, articleId }, result);
+          return result;
+        },
+      );
     },
 
     async findPost({
       articleId,
       tenantId,
     }: FindPostParams): Promise<PublishPostResult | null> {
-      return mockCms.findPost({ platformId, tenantId, articleId });
+      return platformCall(
+        { platformId, operation: 'findPost', articleId, tenantId },
+        async () => mockCms.findPost({ platformId, tenantId, articleId }),
+      );
     },
   };
 }
