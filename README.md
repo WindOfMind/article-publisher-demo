@@ -28,39 +28,65 @@ Each article request lists one or more `platforms`. Adaptors implement `uploadMe
 
 Register new platforms in `src/platforms/registry.ts`.
 
-## Layout
+## Failure handling
 
-```
-src/
-  platforms/
-    types.ts             # PlatformId, PlatformAdapter
-    shopifyAdapter.ts    # Mock Shopify blog adaptor
-    wixAdapter.ts        # Mock Wix blog adaptor
-    registry.ts          # Lookup adaptor by platform
-  infra/
-    mockS3.ts            # In-memory Map store (claim-check)
-    mockCms.ts           # In-memory media/post records for retry lookup
-    mockRateLimiter.ts   # Token buckets keyed by tenant + platform
-    llmGateway.ts        # Normalize/hash prompt cache + mocked text/image providers
-  services/
-    article/
-      articleService.ts     # Control layer: start workflow + read publish history
-      articleStorage.ts     # In-memory platform/URL/status history
-  server/
-    publishServer.ts     # Express POST + GET /tenants/:tenantId/articles
-    main.ts              # Connect Temporal client + listen (PORT=3000)
-  activities/
-    generateTextActivity.ts
-    generateImageActivity.ts
-    uploadCmsMediaActivity.ts
-    publishCmsPostActivity.ts
-    recordArticlePublishActivity.ts
-    metrics.ts           # llmCalls / textCacheHits / imageCalls / imageCacheHits / cmsUploads / cmsPublishes
-  workflows/
-    articleWorkflow.ts   # Orchestration; publish rate limits via activity retries
-test/
-  fullFlow.integration.test.ts  # Crash / recovery harness
-```
+Temporal owns durable execution of `articleWorkflow`. If a worker process dies mid-flight (OOM, crash, restart), incomplete activities are not lost:
+
+- Completed activity results are already recorded in workflow history, so text/image generation is not re-run after a crash.
+- In-flight activities (e.g. media upload) are cancelled or timed out via heartbeats, then **retried on another worker** on the same task queue.
+- Publish uses unbounded activity retries with `nextRetryDelay` for transient rate limits, so a temporary CMS throttle does not fail the article permanently.
+
+Together this gives a publish guarantee: once `publishArticle` starts a workflow, Temporal continues until every listed platform succeeds or hits a terminal (non-retryable / max-attempts) failure — even across machine crashes. The crash harness in `test/fullFlow.integration.test.ts` hard-kills Worker 1 mid-upload and proves Worker 2 finishes every article with live URLs.
+
+Terminal failures only are persisted as `failed` via `recordArticlePublishActivity` (cancellations from worker restart are not treated as publish outcomes).
+
+## Idempotency
+
+Side effects stay safe under Temporal retries and crash recovery:
+
+- **LLM gateway** — topic is normalized and hashed (`SHA-256`); cache hits reuse prior text/image bytes and skip the provider.
+- **CMS media upload** — on `attempt > 1`, `findMedia` returns an existing `cmsMediaId` if a prior attempt already succeeded at the CMS but failed to report back to Temporal.
+- **CMS publish** — on `attempt > 1`, `findPost` returns an existing `liveUrl` before consuming rate-limit tokens, avoiding duplicate posts.
+- **Publish history** — `recordArticlePublishActivity` upserts the same platform entry on retry.
+
+Adapters are written so real CMS APIs that support idempotency keys (e.g. Shopify `Idempotency-Key`) can be wired the same way.
+
+## Rate limiting
+
+`publishCmsPostActivity` enforces dual token-bucket limits via `mockRateLimiter`:
+
+| Scope        | Limit | Key shape                                         |
+| ------------ | ----- | ------------------------------------------------- |
+| Per tenant   | 2 RPS | `tenant:{tenantId}`                               |
+| Per platform | 5 RPS | `platform:{platform}` (shared across all tenants) |
+
+When a bucket is exhausted, the activity throws a retryable `ApplicationFailure` (`TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED`) with `nextRetryDelay: 1 second`. The workflow’s publish Retry Policy uses unbounded attempts and a 1s backoff so Temporal schedules the next try after the delay instead of failing the workflow.
+
+## Image generation cost optimisation
+
+Hero images go through the LLM gateway (`src/infra/llmGateway.ts`) so billable image-provider calls are avoided whenever possible:
+
+1. **Prompt identity** — the topic is normalized (trim, lowercase, collapse whitespace) and hashed with SHA-256 to a stable cache key. Equivalent prompts (`"SEO Topic One"` / `"  seo  topic   one  "`) share one cache entry.
+2. **Cache before provider** — on a hit, `generateImageActivity` returns cached WebP bytes and records `imageCacheHits` instead of calling the provider. Only cache misses increment `imageCalls`.
+3. **Generate once per article** — the workflow runs image generation once, stores bytes in Mock S3 (`imageS3Uri`), and reuses that URI for every platform upload. Multi-platform publish does not multiply image cost.
+4. **Crash durability** — after a successful image activity, Temporal history retains the result; a worker restart does not regenerate or re-bill the image.
+
+The harness asserts `imageCalls ===` article batch size after a mid-flight worker kill, confirming zero duplicate image payment.
+
+## Cost tracking
+
+`metricsService` (`src/services/metrics/metricsService.ts`) counts billable work and CMS side effects in-process:
+
+| Metric           | Meaning                                                |
+| ---------------- | ------------------------------------------------------ |
+| `llmCalls`       | Billable LLM text-provider invocations (cache misses)  |
+| `textCacheHits`  | Text served from gateway cache (no provider cost)      |
+| `imageCalls`     | Billable LLM image-provider invocations (cache misses) |
+| `imageCacheHits` | Image served from gateway cache                        |
+| `cmsUploads`     | CMS media upload calls that actually ran               |
+| `cmsPublishes`   | CMS publish calls that actually ran                    |
+
+Cache hits and retry-time `findMedia` / `findPost` lookups do not increment the corresponding billable counters. The crash harness asserts zero duplicate LLM/image payment after Worker 1 dies (`llmCalls` / `imageCalls` equal the article batch size).
 
 ## Prerequisites
 
