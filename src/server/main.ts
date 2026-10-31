@@ -3,7 +3,7 @@ import {
   ArticleService,
   DEFAULT_ARTICLE_TASK_QUEUE,
 } from '../services/article/articleService';
-import { createPublishServer } from './publishServer';
+import { createArticleServer } from './articleServer';
 
 /**
  * Starts the HTTP publish control API against a running Temporal server.
@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   const connection = await Connection.connect({ address });
   const client = new Client({ connection, namespace });
   const articleService = new ArticleService(client, taskQueue);
-  const app = createPublishServer(articleService);
+  const app = createArticleServer(articleService);
 
   await new Promise<void>((resolve) => {
     app.listen(port, () => resolve());

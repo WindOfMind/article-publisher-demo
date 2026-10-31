@@ -1,4 +1,5 @@
 import { Context } from '@temporalio/activity';
+import { ApplicationFailure } from '@temporalio/common';
 import {
   MockActivityEnvironment,
   TestWorkflowEnvironment,
@@ -46,6 +47,7 @@ import type {
 } from '../src/activities';
 
 const TASK_QUEUE = DEFAULT_ARTICLE_TASK_QUEUE;
+const FAILURE_TASK_QUEUE = `${DEFAULT_ARTICLE_TASK_QUEUE}-failure`;
 const BATCH_SIZE = 10;
 const TENANTS = ['tenant-a', 'tenant-b'] as const;
 /** Every article publishes to both demo platforms. */
@@ -460,5 +462,157 @@ describe('articleWorkflow', () => {
       },
       CRASH_HARNESS_TIMEOUT_MS,
     );
+  });
+
+  describe('failure recording', () => {
+    let env: TestWorkflowEnvironment;
+
+    beforeAll(async () => {
+      env = await TestWorkflowEnvironment.createLocal();
+    }, 60_000);
+
+    afterAll(async () => {
+      await env?.teardown();
+    });
+
+    it('records failed history on non-retryable publish failure', async () => {
+      const worker = await Worker.create({
+        connection: env.nativeConnection,
+        taskQueue: FAILURE_TASK_QUEUE,
+        workflowsPath: require.resolve('../src/workflows'),
+        activities: {
+          ...activities,
+          async publishCmsPostActivity() {
+            throw ApplicationFailure.create({
+              message: 'Missing or empty markdown',
+              type: 'INVALID_CONTENT',
+              nonRetryable: true,
+            });
+          },
+        },
+      });
+
+      const articleService = new ArticleService(env.client, FAILURE_TASK_QUEUE);
+      const tenantId = 'tenant-fail-nonretry';
+      let articleId = '';
+
+      await worker.runUntil(async () => {
+        const started = await articleService.publishArticle({
+          tenantId,
+          platforms: ['shopify'],
+          topic: 'Nonretry Failure Topic',
+        });
+        articleId = started.articleId;
+        const handle = env.client.workflow.getHandle(
+          started.workflowId,
+          started.runId,
+        );
+        await expect(handle.result()).rejects.toThrow();
+      });
+
+      const history = articleService.getPublishHistory(tenantId, articleId);
+      expect(history).not.toBeNull();
+      expect(history!.entries).toHaveLength(1);
+      expect(history!.entries[0]).toMatchObject({
+        platform: 'shopify',
+        status: 'failed',
+        liveUrl: null,
+        error: 'Missing or empty markdown',
+      });
+    }, 60_000);
+
+    it('records failed history when upload retries are exhausted', async () => {
+      const worker = await Worker.create({
+        connection: env.nativeConnection,
+        taskQueue: FAILURE_TASK_QUEUE,
+        workflowsPath: require.resolve('../src/workflows'),
+        activities: {
+          ...activities,
+          async uploadCmsMediaActivity() {
+            throw ApplicationFailure.create({
+              message: 'transient CMS upload error',
+              type: 'UPLOAD_TRANSIENT',
+            });
+          },
+        },
+      });
+
+      const articleService = new ArticleService(env.client, FAILURE_TASK_QUEUE);
+      const tenantId = 'tenant-fail-maxattempts';
+      let articleId = '';
+
+      await worker.runUntil(async () => {
+        const started = await articleService.publishArticle({
+          tenantId,
+          platforms: ['wix'],
+          topic: 'Max Attempts Topic',
+        });
+        articleId = started.articleId;
+        const handle = env.client.workflow.getHandle(
+          started.workflowId,
+          started.runId,
+        );
+        await expect(handle.result()).rejects.toThrow();
+      });
+
+      const history = articleService.getPublishHistory(tenantId, articleId);
+      expect(history).not.toBeNull();
+      expect(history!.entries[0]).toMatchObject({
+        platform: 'wix',
+        status: 'failed',
+        liveUrl: null,
+      });
+      expect(history!.entries[0]!.error).toContain(
+        'transient CMS upload error',
+      );
+    }, 90_000);
+
+    it('does not record failed history when the workflow is cancelled', async () => {
+      const worker = await Worker.create({
+        connection: env.nativeConnection,
+        taskQueue: FAILURE_TASK_QUEUE,
+        workflowsPath: require.resolve('../src/workflows'),
+        activities: {
+          ...activities,
+          async uploadCmsMediaActivity() {
+            // Park until cancellation (worker restart / workflow cancel).
+            await Context.current().cancelled;
+          },
+        },
+        shutdownGraceTime: '50 ms',
+      });
+
+      const articleService = new ArticleService(env.client, FAILURE_TASK_QUEUE);
+      const tenantId = 'tenant-fail-cancel';
+
+      await worker.runUntil(async () => {
+        const started = await articleService.publishArticle({
+          tenantId,
+          platforms: ['shopify'],
+          topic: 'Cancel Topic',
+        });
+        const handle = env.client.workflow.getHandle(
+          started.workflowId,
+          started.runId,
+        );
+
+        // Wait until content gen finishes and upload is parked.
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+        await handle.cancel();
+        await expect(handle.result()).rejects.toThrow();
+
+        const history = articleService.getPublishHistory(
+          tenantId,
+          started.articleId,
+        );
+        expect(history).not.toBeNull();
+        expect(history!.entries[0]).toMatchObject({
+          platform: 'shopify',
+          status: 'pending',
+          liveUrl: null,
+          error: null,
+        });
+      });
+    }, 60_000);
   });
 });

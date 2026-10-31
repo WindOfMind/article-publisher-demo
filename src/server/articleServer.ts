@@ -28,7 +28,7 @@ function articleIdFromParams(req: Request): string {
  * GET /tenants/:tenantId/articles/:articleId
  *   → 200 publish history (platform, liveUrl, status) or 404
  */
-export function createPublishServer(articleService: ArticleService): Express {
+export function createArticleServer(articleService: ArticleService): Express {
   const app = express();
   app.use(express.json());
 
