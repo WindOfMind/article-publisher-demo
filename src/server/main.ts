@@ -1,4 +1,6 @@
 import { Client, Connection } from '@temporalio/client';
+import { NativeConnection, Worker } from '@temporalio/worker';
+import * as activities from '../activities';
 import {
   ArticleService,
   DEFAULT_ARTICLE_TASK_QUEUE,
@@ -6,8 +8,8 @@ import {
 import { createArticleServer } from './articleServer';
 
 /**
- * Starts the HTTP publish control API against a running Temporal server.
- * Requires a Temporal server and a worker polling the article task queue.
+ * Starts the HTTP publish control API and a Temporal worker that polls
+ * the article task queue. Requires a Temporal server (e.g. `temporal server start-dev`).
  */
 async function main(): Promise<void> {
   const address = process.env.TEMPORAL_ADDRESS ?? 'localhost:7233';
@@ -32,6 +34,18 @@ async function main(): Promise<void> {
     'POST /tenants/:tenantId/articles  { "topic": "...", "platforms": ["shopify","wix"] }',
   );
   console.log('GET  /tenants/:tenantId/articles/:articleId  → publish history');
+
+  const nativeConnection = await NativeConnection.connect({ address });
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    namespace,
+    taskQueue,
+    workflowsPath: require.resolve('../workflows'),
+    activities,
+  });
+
+  console.log(`Worker polling task queue ${taskQueue}`);
+  await worker.run();
 }
 
 main().catch((err: unknown) => {

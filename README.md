@@ -90,12 +90,13 @@ Cache hits and retry-time `findMedia` / `findPost` lookups do not increment the 
 
 - Node.js 18+
 - npm
+- [Temporal CLI](https://docs.temporal.io/cli) (for the optional local publish API)
 
 ## Setup & run
 
 ```bash
-npm install
-npm run build   # compile TypeScript to dist/
+npm install                 # install dependencies
+npm run build               # compile TypeScript to dist/
 ```
 
 ### Tests
@@ -103,20 +104,31 @@ npm run build   # compile TypeScript to dist/
 All tests run via Jest against `@temporalio/testing` — no external Temporal server required.
 
 ```bash
-npm test                  # unit + integration
+npm test                    # run unit + integration tests
 ```
 
 ### Publish control API (optional)
 
-Requires a Temporal server and a worker on task queue `article-publisher-poc`.
+Requires a local Temporal server. `npm run dev` starts the HTTP API and a worker on task queue `article-publisher-poc` in the same process (they share in-memory publish history).
 
 ```bash
-npm run build
-npm run dev   # POST http://localhost:3000/tenants/:tenantId/articles
+temporal server start-dev   # local Temporal server (gRPC :7233, UI :8233)
+npm run build               # compile TypeScript to dist/
+npm run dev                 # start publish HTTP API (:3000) + Temporal worker
 ```
 
-Body: `{ "articleId": "article-01", "topic": "SEO Topic 1", "platforms": ["shopify", "wix"] }` → `202` `{ workflowId, runId }`.
+Start a publish workflow (`platforms` is a non-empty array of `shopify` and/or `wix`; one workflow generates content once and publishes to every listed platform):
 
-`GET /tenants/:tenantId/articles/:articleId` → `200` publish history (`entries[].platform`, `liveUrl`, `status`: `pending` | `published` | `failed`) or `404`.
+```bash
+# POST /tenants/:tenantId/articles → 202 { articleId, workflowId, runId }
+curl -s -X POST http://localhost:3000/tenants/demo-tenant/articles \
+  -H 'Content-Type: application/json' \
+  -d '{"topic":"SEO Topic 1","platforms":["shopify","wix"]}'
+```
 
-`platforms` is a non-empty array of `shopify` and/or `wix`. One workflow generates content once and publishes to every listed platform.
+Poll publish history (`entries[].platform`, `liveUrl`, `status`: `pending` | `published` | `failed`):
+
+```bash
+# GET /tenants/:tenantId/articles/:articleId → 200 history or 404
+curl -s http://localhost:3000/tenants/demo-tenant/articles/<articleId>
+```
