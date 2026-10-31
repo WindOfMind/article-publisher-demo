@@ -71,8 +71,6 @@ Hero images go through the LLM gateway (`src/infra/llmGateway.ts`) so billable i
 3. **Generate once per article** — the workflow runs image generation once, stores bytes in Mock S3 (`imageS3Uri`), and reuses that URI for every platform upload. Multi-platform publish does not multiply image cost.
 4. **Crash durability** — after a successful image activity, Temporal history retains the result; a worker restart does not regenerate or re-bill the image.
 
-The harness asserts `imageCalls ===` article batch size after a mid-flight worker kill, confirming zero duplicate image payment.
-
 ## Cost tracking
 
 `metricsService` (`src/services/metrics/metricsService.ts`) counts billable work and CMS side effects in-process:
