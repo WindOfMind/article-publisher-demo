@@ -1,7 +1,10 @@
 import { log } from '@temporalio/activity';
 import { llmGateway } from '../infra/llmGateway';
 import { mockS3 } from '../infra/mockS3';
-import { metrics } from './metrics';
+import {
+  metricsService,
+  type MetricsService,
+} from '../services/metrics/metricsService';
 
 export interface GenerateTextInput {
   articleId: string;
@@ -21,43 +24,49 @@ export interface GenerateTextResult {
  * so repeated prompts do not incur another billable provider call.
  * Stores markdown in Mock S3 (claim-check) and returns only the URI.
  */
-export async function generateTextActivity(
-  input: GenerateTextInput,
-): Promise<GenerateTextResult> {
-  log.info('Generating article text', {
-    articleId: input.articleId,
-    tenantId: input.tenantId,
-    topic: input.topic,
-  });
-
-  const { markdown, cacheHit, cacheKey } = await llmGateway.generateText({
-    prompt: input.topic,
-  });
-
-  if (cacheHit) {
-    metrics.textCacheHits += 1;
-    log.info('Text served from LLM gateway cache', {
+export function createGenerateTextActivity(
+  metrics: MetricsService = metricsService,
+) {
+  return async function generateTextActivity(
+    input: GenerateTextInput,
+  ): Promise<GenerateTextResult> {
+    log.info('Generating article text', {
       articleId: input.articleId,
-      cacheKey,
+      tenantId: input.tenantId,
+      topic: input.topic,
     });
-  } else {
-    metrics.llmCalls += 1;
-    log.info('Text generated via LLM provider and cached', {
+
+    const { markdown, cacheHit, cacheKey } = await llmGateway.generateText({
+      prompt: input.topic,
+    });
+
+    if (cacheHit) {
+      metrics.recordTextCacheHit();
+      log.info('Text served from LLM gateway cache', {
+        articleId: input.articleId,
+        cacheKey,
+      });
+    } else {
+      metrics.recordLlmCall();
+      log.info('Text generated via LLM provider and cached', {
+        articleId: input.articleId,
+        cacheKey,
+      });
+    }
+
+    const textS3Uri = await mockS3.put(
+      `articles/${input.tenantId}/${input.articleId}/content.md`,
+      markdown,
+    );
+
+    log.info('Article text stored', {
       articleId: input.articleId,
-      cacheKey,
+      textS3Uri,
+      cacheHit,
     });
-  }
 
-  const textS3Uri = await mockS3.put(
-    `articles/${input.tenantId}/${input.articleId}/content.md`,
-    markdown,
-  );
-
-  log.info('Article text stored', {
-    articleId: input.articleId,
-    textS3Uri,
-    cacheHit,
-  });
-
-  return { textS3Uri, cacheHit };
+    return { textS3Uri, cacheHit };
+  };
 }
+
+export const generateTextActivity = createGenerateTextActivity();

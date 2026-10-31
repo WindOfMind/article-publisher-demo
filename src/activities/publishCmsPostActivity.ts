@@ -8,7 +8,10 @@ import {
 } from '../platforms';
 import { mockRateLimiter } from '../infra/mockRateLimiter';
 import { mockS3 } from '../infra/mockS3';
-import { metrics } from './metrics';
+import {
+  metricsService,
+  type MetricsService,
+} from '../services/metrics/metricsService';
 
 export interface PublishCmsPostInput {
   articleId: string;
@@ -21,6 +24,11 @@ export interface PublishCmsPostInput {
 
 export interface PublishCmsPostResult {
   liveUrl: string;
+}
+
+export interface PublishCmsPostDeps {
+  registry?: PlatformAdapterRegistry;
+  metrics?: MetricsService;
 }
 
 /** Per-tenant publish budget. */
@@ -48,8 +56,11 @@ function platformKey(platformId: PlatformId): string {
  * that failed to report does not create a duplicate or consume rate-limit tokens.
  */
 export function createPublishCmsPostActivity(
-  registry: PlatformAdapterRegistry = createDefaultPlatformRegistry(),
+  deps: PublishCmsPostDeps = {},
 ) {
+  const registry = deps.registry ?? createDefaultPlatformRegistry();
+  const metrics = deps.metrics ?? metricsService;
+
   return async function publishCmsPostActivity(
     input: PublishCmsPostInput,
   ): Promise<PublishCmsPostResult> {
@@ -116,7 +127,7 @@ export function createPublishCmsPostActivity(
       });
     }
 
-    metrics.cmsPublishes += 1;
+    metrics.recordCmsPublish();
 
     // Claim-check: pull markdown from Mock S3 rather than receiving it as an activity arg.
     const markdown = await mockS3.get(input.textS3Uri);

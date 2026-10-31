@@ -7,8 +7,6 @@ import { Worker } from '@temporalio/worker';
 import {
   createPublishCmsPostActivity,
   createUploadCmsMediaActivity,
-  metrics,
-  resetMetrics,
   type PublishCmsPostResult,
   type UploadCmsMediaResult,
 } from '../src/activities';
@@ -19,6 +17,7 @@ import {
   type PublishArticleInput,
 } from '../src/services/article/articleService';
 import { articleStorage } from '../src/services/article/articleStorage';
+import { metricsService } from '../src/services/metrics/metricsService';
 import {
   PLATFORM_IDS,
   createDefaultPlatformRegistry,
@@ -103,7 +102,7 @@ function createSlowPlatformRegistry(delayMs: number): PlatformAdapterRegistry {
 async function assertTextGatewayCache(): Promise<void> {
   console.log('=== LLM text gateway cache ===\n');
 
-  resetMetrics();
+  metricsService.reset();
   mockS3.clear();
   llmGateway.clear();
 
@@ -116,8 +115,9 @@ async function assertTextGatewayCache(): Promise<void> {
     },
   )) as GenerateTextResult;
   assert(!first.cacheHit, 'first generation must be a cache miss');
-  const callsAfterMiss = metrics.llmCalls;
-  const hitsAfterMiss = metrics.textCacheHits;
+  const afterMiss = metricsService.snapshot();
+  const callsAfterMiss = afterMiss.llmCalls;
+  const hitsAfterMiss = afterMiss.textCacheHits;
   assert(
     callsAfterMiss === 1,
     `expected llmCalls=1 after miss, got ${callsAfterMiss}`,
@@ -141,8 +141,9 @@ async function assertTextGatewayCache(): Promise<void> {
     second.cacheHit,
     'second generation with same topic must be a cache hit',
   );
-  const callsAfterHit = metrics.llmCalls;
-  const hitsAfterHit = metrics.textCacheHits;
+  const afterHit = metricsService.snapshot();
+  const callsAfterHit = afterHit.llmCalls;
+  const hitsAfterHit = afterHit.textCacheHits;
   assert(
     callsAfterHit === 1,
     `cache hit must not increment llmCalls, got ${callsAfterHit}`,
@@ -169,7 +170,7 @@ async function assertTextGatewayCache(): Promise<void> {
 async function assertImageGatewayCache(): Promise<void> {
   console.log('=== LLM image gateway cache ===\n');
 
-  resetMetrics();
+  metricsService.reset();
   mockS3.clear();
   llmGateway.clear();
 
@@ -197,8 +198,9 @@ async function assertImageGatewayCache(): Promise<void> {
     },
   )) as GenerateImageResult;
   assert(!first.cacheHit, 'first generation must be a cache miss');
-  const callsAfterMiss = metrics.imageCalls;
-  const hitsAfterMiss = metrics.imageCacheHits;
+  const afterMiss = metricsService.snapshot();
+  const callsAfterMiss = afterMiss.imageCalls;
+  const hitsAfterMiss = afterMiss.imageCacheHits;
   assert(
     callsAfterMiss === 1,
     `expected imageCalls=1 after miss, got ${callsAfterMiss}`,
@@ -222,8 +224,9 @@ async function assertImageGatewayCache(): Promise<void> {
     second.cacheHit,
     'second generation with same topic must be a cache hit',
   );
-  const callsAfterHit = metrics.imageCalls;
-  const hitsAfterHit = metrics.imageCacheHits;
+  const afterHit = metricsService.snapshot();
+  const callsAfterHit = afterHit.imageCalls;
+  const hitsAfterHit = afterHit.imageCacheHits;
   assert(
     callsAfterHit === 1,
     `cache hit must not increment imageCalls, got ${callsAfterHit}`,
@@ -251,7 +254,7 @@ async function assertImageGatewayCache(): Promise<void> {
 async function assertRetryOnlyCmsLookup(): Promise<void> {
   console.log('=== Retry-only CMS existence check ===\n');
 
-  resetMetrics();
+  metricsService.reset();
   mockS3.clear();
   mockCms.clear();
   mockRateLimiter.clear();
@@ -271,15 +274,15 @@ async function assertRetryOnlyCmsLookup(): Promise<void> {
     '# Retry Topic\n\nBody.',
   );
 
-  const upload = createUploadCmsMediaActivity();
-  const publish = createPublishCmsPostActivity();
+  const upload = createUploadCmsMediaActivity({ metrics: metricsService });
+  const publish = createPublishCmsPostActivity({ metrics: metricsService });
   const uploadInput = { articleId, tenantId, platform, imageS3Uri };
   const firstUpload = (await new MockActivityEnvironment({
     attempt: 1,
   }).run(upload, uploadInput)) as UploadCmsMediaResult;
   assert(
-    metrics.cmsUploads === 1,
-    `expected cmsUploads=1 after first upload, got ${metrics.cmsUploads}`,
+    metricsService.snapshot().cmsUploads === 1,
+    `expected cmsUploads=1 after first upload, got ${metricsService.snapshot().cmsUploads}`,
   );
 
   const retryUpload = (await new MockActivityEnvironment({
@@ -290,8 +293,8 @@ async function assertRetryOnlyCmsLookup(): Promise<void> {
     `retry upload should reuse media id ${firstUpload.cmsMediaId}, got ${retryUpload.cmsMediaId}`,
   );
   assert(
-    metrics.cmsUploads === 1,
-    `retry upload must not increment cmsUploads, got ${metrics.cmsUploads}`,
+    metricsService.snapshot().cmsUploads === 1,
+    `retry upload must not increment cmsUploads, got ${metricsService.snapshot().cmsUploads}`,
   );
   console.log('✓ Upload retry reuses existing cmsMediaId without re-upload.');
 
@@ -307,8 +310,8 @@ async function assertRetryOnlyCmsLookup(): Promise<void> {
     attempt: 1,
   }).run(publish, publishInput)) as PublishCmsPostResult;
   assert(
-    metrics.cmsPublishes === 1,
-    `expected cmsPublishes=1 after first publish, got ${metrics.cmsPublishes}`,
+    metricsService.snapshot().cmsPublishes === 1,
+    `expected cmsPublishes=1 after first publish, got ${metricsService.snapshot().cmsPublishes}`,
   );
 
   const retryPublish = (await new MockActivityEnvironment({
@@ -319,8 +322,8 @@ async function assertRetryOnlyCmsLookup(): Promise<void> {
     `retry publish should reuse liveUrl ${firstPublish.liveUrl}, got ${retryPublish.liveUrl}`,
   );
   assert(
-    metrics.cmsPublishes === 1,
-    `retry publish must not increment cmsPublishes, got ${metrics.cmsPublishes}`,
+    metricsService.snapshot().cmsPublishes === 1,
+    `retry publish must not increment cmsPublishes, got ${metricsService.snapshot().cmsPublishes}`,
   );
   console.log('✓ Publish retry reuses existing liveUrl without re-publish.\n');
 }
@@ -346,9 +349,10 @@ async function cancellableDelay(ms: number): Promise<void> {
 function createHarnessActivities() {
   return {
     ...activities,
-    uploadCmsMediaActivity: createUploadCmsMediaActivity(
-      createSlowPlatformRegistry(UPLOAD_DELAY_MS),
-    ),
+    uploadCmsMediaActivity: createUploadCmsMediaActivity({
+      registry: createSlowPlatformRegistry(UPLOAD_DELAY_MS),
+      metrics: metricsService,
+    }),
   };
 }
 
@@ -384,9 +388,9 @@ function isLivePlatformUrl(url: string): boolean {
   5. Starts **Worker 2** on the same task queue.
   6. Awaits all handles, then asserts:
     - All 10 workflows return live URLs for both platforms
-    - `metrics.llmCalls === 10` (content generated once per article)
-    - `metrics.imageCalls === 10`
-    - `metrics.cmsPublishes === 20` (10 articles × 2 platforms)
+    - `metricsService.snapshot().llmCalls === 10` (content generated once per article)
+    - `metricsService.snapshot().imageCalls === 10`
+    - `metricsService.snapshot().cmsPublishes === 20` (10 articles × 2 platforms)
 
   Uploads abandoned by Worker 1 are retried by Worker 2 (`cmsUploads` may be > 20);
   completed LLM/image steps are not re-executed because Temporal recorded their results in workflow history.
@@ -399,7 +403,7 @@ async function main(): Promise<void> {
 
   console.log('=== SEO Article Publisher PoC — Crash Harness ===\n');
 
-  resetMetrics();
+  metricsService.reset();
   mockS3.clear();
   mockCms.clear();
   mockRateLimiter.clear();
@@ -444,21 +448,22 @@ async function main(): Promise<void> {
     console.log('Worker 1 stopped.\n');
 
     // Intermediate progress must have been made before the crash.
+    const mid = metricsService.snapshot();
     console.log('Intermediate metrics after Worker 1 crash:');
-    console.log(`  llmCalls        = ${metrics.llmCalls}`);
-    console.log(`  textCacheHits   = ${metrics.textCacheHits}`);
-    console.log(`  imageCalls      = ${metrics.imageCalls}`);
-    console.log(`  imageCacheHits  = ${metrics.imageCacheHits}`);
-    console.log(`  cmsUploads      = ${metrics.cmsUploads}`);
-    console.log(`  cmsPublishes    = ${metrics.cmsPublishes}`);
+    console.log(`  llmCalls        = ${mid.llmCalls}`);
+    console.log(`  textCacheHits   = ${mid.textCacheHits}`);
+    console.log(`  imageCalls      = ${mid.imageCalls}`);
+    console.log(`  imageCacheHits  = ${mid.imageCacheHits}`);
+    console.log(`  cmsUploads      = ${mid.cmsUploads}`);
+    console.log(`  cmsPublishes    = ${mid.cmsPublishes}`);
 
     assert(
-      metrics.llmCalls > 0,
-      `expected intermediate llmCalls > 0, got ${metrics.llmCalls}`,
+      mid.llmCalls > 0,
+      `expected intermediate llmCalls > 0, got ${mid.llmCalls}`,
     );
     assert(
-      metrics.imageCalls > 0,
-      `expected intermediate imageCalls > 0, got ${metrics.imageCalls}`,
+      mid.imageCalls > 0,
+      `expected intermediate imageCalls > 0, got ${mid.imageCalls}`,
     );
     console.log('✓ Intermediate LLM / image calls occurred before crash.\n');
 
@@ -508,25 +513,26 @@ async function main(): Promise<void> {
       `✓ All ${BATCH_SIZE} workflows returned live URLs for ${ARTICLE_PLATFORMS.join(' + ')}.`,
     );
 
+    const finalMetrics = metricsService.snapshot();
     assert(
-      metrics.llmCalls === BATCH_SIZE,
-      `zero-duplicate LLM payment violated: llmCalls=${metrics.llmCalls}, expected ${BATCH_SIZE}`,
+      finalMetrics.llmCalls === BATCH_SIZE,
+      `zero-duplicate LLM payment violated: llmCalls=${finalMetrics.llmCalls}, expected ${BATCH_SIZE}`,
     );
     console.log(
       `✓ metrics.llmCalls === ${BATCH_SIZE} (one generation per article)`,
     );
 
     assert(
-      metrics.imageCalls === BATCH_SIZE,
-      `zero-duplicate image payment violated: imageCalls=${metrics.imageCalls}, expected ${BATCH_SIZE}`,
+      finalMetrics.imageCalls === BATCH_SIZE,
+      `zero-duplicate image payment violated: imageCalls=${finalMetrics.imageCalls}, expected ${BATCH_SIZE}`,
     );
     console.log(
       `✓ metrics.imageCalls === ${BATCH_SIZE} (one generation per article)`,
     );
 
     assert(
-      metrics.cmsPublishes === EXPECTED_PUBLISHES,
-      `cmsPublishes=${metrics.cmsPublishes}, expected ${EXPECTED_PUBLISHES}`,
+      finalMetrics.cmsPublishes === EXPECTED_PUBLISHES,
+      `cmsPublishes=${finalMetrics.cmsPublishes}, expected ${EXPECTED_PUBLISHES}`,
     );
     console.log(
       `✓ metrics.cmsPublishes === ${EXPECTED_PUBLISHES} (${BATCH_SIZE} × ${ARTICLE_PLATFORMS.length} platforms)`,
@@ -567,12 +573,12 @@ async function main(): Promise<void> {
     );
 
     console.log('\nFinal metrics:');
-    console.log(`  llmCalls        = ${metrics.llmCalls}`);
-    console.log(`  textCacheHits   = ${metrics.textCacheHits}`);
-    console.log(`  imageCalls      = ${metrics.imageCalls}`);
-    console.log(`  imageCacheHits  = ${metrics.imageCacheHits}`);
-    console.log(`  cmsUploads      = ${metrics.cmsUploads}`);
-    console.log(`  cmsPublishes    = ${metrics.cmsPublishes}`);
+    console.log(`  llmCalls        = ${finalMetrics.llmCalls}`);
+    console.log(`  textCacheHits   = ${finalMetrics.textCacheHits}`);
+    console.log(`  imageCalls      = ${finalMetrics.imageCalls}`);
+    console.log(`  imageCacheHits  = ${finalMetrics.imageCacheHits}`);
+    console.log(`  cmsUploads      = ${finalMetrics.cmsUploads}`);
+    console.log(`  cmsPublishes    = ${finalMetrics.cmsPublishes}`);
     console.log(`  mockS3 objects  = ${mockS3.size()}`);
     console.log(`  llm cache       = ${llmGateway.cacheSize()}`);
 

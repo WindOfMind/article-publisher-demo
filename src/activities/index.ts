@@ -1,13 +1,16 @@
-export { metrics, resetMetrics } from './metrics';
-export type { MetricsSnapshot } from './metrics';
-
-export { generateTextActivity } from './generateTextActivity';
+export {
+  createGenerateTextActivity,
+  generateTextActivity,
+} from './generateTextActivity';
 export type {
   GenerateTextInput,
   GenerateTextResult,
 } from './generateTextActivity';
 
-export { generateImageActivity } from './generateImageActivity';
+export {
+  createGenerateImageActivity,
+  generateImageActivity,
+} from './generateImageActivity';
 export type {
   GenerateImageInput,
   GenerateImageResult,
@@ -18,6 +21,7 @@ export {
   uploadCmsMediaActivity,
 } from './uploadCmsMediaActivity';
 export type {
+  UploadCmsMediaDeps,
   UploadCmsMediaInput,
   UploadCmsMediaResult,
 } from './uploadCmsMediaActivity';
@@ -27,6 +31,7 @@ export {
   publishCmsPostActivity,
 } from './publishCmsPostActivity';
 export type {
+  PublishCmsPostDeps,
   PublishCmsPostInput,
   PublishCmsPostResult,
 } from './publishCmsPostActivity';

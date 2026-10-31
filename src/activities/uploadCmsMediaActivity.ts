@@ -6,7 +6,10 @@ import {
   type PlatformId,
 } from '../platforms';
 import { mockS3 } from '../infra/mockS3';
-import { metrics } from './metrics';
+import {
+  metricsService,
+  type MetricsService,
+} from '../services/metrics/metricsService';
 
 export interface UploadCmsMediaInput {
   articleId: string;
@@ -19,6 +22,11 @@ export interface UploadCmsMediaResult {
   cmsMediaId: string;
 }
 
+export interface UploadCmsMediaDeps {
+  registry?: PlatformAdapterRegistry;
+  metrics?: MetricsService;
+}
+
 /**
  * Fetches the image from Mock S3 (claim-check) and uploads it via the
  * platform adaptor for the article's target platform. Returns only the media id.
@@ -27,8 +35,11 @@ export interface UploadCmsMediaResult {
  * when a prior attempt succeeded at the CMS but failed to report to Temporal.
  */
 export function createUploadCmsMediaActivity(
-  registry: PlatformAdapterRegistry = createDefaultPlatformRegistry(),
+  deps: UploadCmsMediaDeps = {},
 ) {
+  const registry = deps.registry ?? createDefaultPlatformRegistry();
+  const metrics = deps.metrics ?? metricsService;
+
   return async function uploadCmsMediaActivity(
     input: UploadCmsMediaInput,
   ): Promise<UploadCmsMediaResult> {
@@ -60,7 +71,7 @@ export function createUploadCmsMediaActivity(
       }
     }
 
-    metrics.cmsUploads += 1;
+    metrics.recordCmsUpload();
 
     const imageData = await mockS3.get(input.imageS3Uri);
     const result = await adapter.uploadMedia({
