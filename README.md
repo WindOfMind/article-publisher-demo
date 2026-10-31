@@ -2,7 +2,7 @@
 
 Self-contained Temporal PoC for an SEO article publishing pipeline. Runs entirely locally via `@temporalio/testing` — no Redis, Postgres, or real S3 required.
 
-Diagram: https://excalidraw.com/#json=BvfLeXX9qyqCkJ7rWQAcg,PKqk1F-vFp02OC4tAfLekA
+Diagram: https://excalidraw.com/#json=STnI47eOMtPC8Fh1L0XON,SswzLuli8aBLUmX1qUyNdg
 
 ## Pipeline
 
