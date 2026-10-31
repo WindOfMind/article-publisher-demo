@@ -95,10 +95,16 @@ Cache hits and retry-time `findMedia` / `findPost` lookups do not increment the 
 
 ```bash
 npm install
-npm test    # tsc + crash harness
+npm run build   # compile TypeScript to dist/
 ```
 
-`npm run build` compiles TypeScript to `dist/` only.
+### Tests
+
+All tests run via Jest against `@temporalio/testing` — no external Temporal server required.
+
+```bash
+npm test                  # unit + integration
+```
 
 ### Publish control API (optional)
 
@@ -106,7 +112,7 @@ Requires a Temporal server and a worker on task queue `article-publisher-poc`.
 
 ```bash
 npm run build
-npm run publish:server   # POST http://localhost:3000/tenants/:tenantId/articles
+npm run dev   # POST http://localhost:3000/tenants/:tenantId/articles
 ```
 
 Body: `{ "articleId": "article-01", "topic": "SEO Topic 1", "platforms": ["shopify", "wix"] }` → `202` `{ workflowId, runId }`.
@@ -114,7 +120,3 @@ Body: `{ "articleId": "article-01", "topic": "SEO Topic 1", "platforms": ["shopi
 `GET /tenants/:tenantId/articles/:articleId` → `200` publish history (`entries[].platform`, `liveUrl`, `status`: `pending` | `published` | `failed`) or `404`.
 
 `platforms` is a non-empty array of `shopify` and/or `wix`. One workflow generates content once and publishes to every listed platform.
-
-## Crash harness
-
-`test/fullFlow.integration.test.ts` proves durability and zero duplicate LLM/image payment when each article fans out to both platforms.

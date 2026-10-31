@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "description": "Self-contained PoC for an SEO article publishing pipeline using Temporal",
   "private": true,
-  "main": "dist/test/fullFlow.integration.test.js",
+  "main": "dist/src/server/main.js",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node dist/test/fullFlow.integration.test.js",
-    "publish:server": "node dist/src/server/main.js",
+    "test:unit": "jest --testPathIgnorePatterns=integration",
+    "test:integration": "jest --testPathPatterns=integration --runInBand",
+    "test": "npm run test:unit && npm run test:integration",
+    "dev": "node dist/src/server/main.js",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -25,8 +27,11 @@
   "devDependencies": {
     "@temporalio/testing": "^1.11.7",
     "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.17.0",
+    "jest": "^30.5.2",
     "prettier": "^3.3.3",
+    "ts-jest": "^29.4.15",
     "typescript": "^5.6.3"
   }
 }
