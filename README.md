@@ -10,7 +10,7 @@ Diagram: https://excalidraw.com/#json=STnI47eOMtPC8Fh1L0XON,SswzLuli8aBLUmX1qUyN
 Article (platforms[]) -> Text (LLM) ∥ Image → per platform: Media Upload → Publish
 ```
 
-1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Both go through the **LLM gateway** (normalize topic → SHA-256 cache key → cache hit or mocked provider). Text stores markdown in Mock S3 and returns `textS3Uri` (claim-check); image stores WebP and returns `imageS3Uri`. Repeated / equivalent prompts skip usage of LLM to generate image (used from cache).
+1. **generateTextActivity** / **generateImageActivity** — run in parallel once per article. Both go through the **LLM gateway** (normalize topic → SHA-256 cache key → cache hit or mocked provider). Text stores markdown in Mock S3 and returns `textS3Uri` (claim-check); the image gateway stores WebP in Mock S3 and returns `imageS3Uri`. Repeated / equivalent prompts skip the image provider and reuse the cached URI.
 2. **uploadCmsMediaActivity** — for each platform in the request/config, fetches image from Mock S3 and uploads via that platform's adaptor; returns `cmsMediaId`. On retry (`attempt > 1`), looks up existing CMS media first so a prior success that failed to report does not upload again.
 3. **publishCmsPostActivity** — dual rate limits: per-tenant (2 RPS) and per-platform (5 RPS total across all tenants on that platform). Publishes via the same adaptor. On exhaustion throws retryable `TENANT_RATE_LIMITED` / `PLATFORM_RATE_LIMITED` with `nextRetryDelay: 1s` so the activity Retry Policy backs off and retries. On retry (`attempt > 1`), looks up an existing post first (before rate-limit tokens) and returns its `liveUrl` when found.
 4. **recordArticlePublishActivity** — saves per-platform outcome (`published` + `liveUrl`, or `failed`) via `ArticleService.savePublishResult`. `ArticleService.publishArticle` seeds entries as `pending` when the workflow starts.
@@ -67,8 +67,8 @@ When a bucket is exhausted, the activity throws a retryable `ApplicationFailure`
 Hero images go through the LLM gateway (`src/infra/llmGateway.ts`) so billable image-provider calls are avoided whenever possible:
 
 1. **Prompt identity** — the topic is normalized (trim, lowercase, collapse whitespace) and hashed with SHA-256 to a stable cache key. Equivalent prompts (`"SEO Topic One"` / `"  seo  topic   one  "`) share one cache entry.
-2. **Cache before provider** — on a hit, `generateImageActivity` returns cached WebP bytes and records `imageCacheHits` instead of calling the provider. Only cache misses increment `imageCalls`.
-3. **Generate once per article** — the workflow runs image generation once, stores bytes in Mock S3 (`imageS3Uri`), and reuses that URI for every platform upload. Multi-platform publish does not multiply image cost.
+2. **Cache before provider** — on a hit, the gateway returns the cached Mock S3 download URI and records `imageCacheHits` instead of calling the provider. Only cache misses generate bytes, put them in Mock S3, and increment `imageCalls`.
+3. **Generate once per article** — the workflow runs image generation once, receives `imageS3Uri` from the gateway, and reuses that URI for every platform upload. Multi-platform publish does not multiply image cost.
 4. **Crash durability** — after a successful image activity, Temporal history retains the result; a worker restart does not regenerate or re-bill the image.
 
 ## Cost tracking

@@ -200,7 +200,7 @@ describe('articleWorkflow', () => {
   });
 
   describe('LLM image gateway cache', () => {
-    it('normalizes prompts and reuses image bytes on cache hit', async () => {
+    it('normalizes prompts and reuses S3 image URI on cache hit', async () => {
       expect(normalizePrompt('  SEO  Topic   One  ')).toBe('seo topic one');
       expect(promptCacheKey('SEO Topic One')).toBe(hashPrompt('seo topic one'));
       expect(promptCacheKey('  SEO  Topic   One  ')).toBe(
@@ -238,6 +238,7 @@ describe('articleWorkflow', () => {
         imageCacheHits: 1,
       });
 
+      expect(first.imageS3Uri).toBe(second.imageS3Uri);
       const firstBytes = await mockS3.get(first.imageS3Uri);
       const secondBytes = await mockS3.get(second.imageS3Uri);
       expect(Buffer.isBuffer(firstBytes)).toBe(true);

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { MockS3, mockS3 } from './mockS3';
 
 /**
  * Collapse prompt/topic variants that should share one generated result
@@ -66,7 +67,8 @@ export interface GenerateImageRequest {
 }
 
 export interface GenerateImageResponse {
-  imageBytes: Buffer;
+  /** Claim-check URI; bytes live in Mock S3 (generated or cache hit). */
+  imageS3Uri: string;
   cacheHit: boolean;
   cacheKey: string;
 }
@@ -119,16 +121,19 @@ export class MockLlmImageProvider implements LlmImageProvider {
 
 /**
  * Cost-saving LLM gateway: normalize → hash → cache lookup → provider on miss.
- * Text and image results are cached by prompt identity so repeated topics skip
- * the LLM.
+ * Text results are cached in-memory; images are stored in Mock S3 and the
+ * cache holds download URIs so repeated topics skip the LLM and never move
+ * bytes through the gateway response.
  */
 export class LlmGateway {
   private readonly textCache = new Map<string, string>();
-  private readonly imageCache = new Map<string, Buffer>();
+  /** Prompt cache key → Mock S3 URI for the generated WebP. */
+  private readonly imageCache = new Map<string, string>();
 
   constructor(
     private readonly textProvider: LlmTextProvider = new MockLlmTextProvider(),
     private readonly imageProvider: LlmImageProvider = new MockLlmImageProvider(),
+    private readonly objectStore: MockS3 = mockS3,
   ) {}
 
   async generateText(
@@ -160,10 +165,10 @@ export class LlmGateway {
     request: GenerateImageRequest,
   ): Promise<GenerateImageResponse> {
     const cacheKey = promptCacheKey(request.prompt);
-    const cached = this.imageCache.get(cacheKey);
-    if (cached !== undefined) {
+    const cachedUri = this.imageCache.get(cacheKey);
+    if (cachedUri !== undefined) {
       return {
-        imageBytes: Buffer.from(cached),
+        imageS3Uri: cachedUri,
         cacheHit: true,
         cacheKey,
       };
@@ -172,10 +177,14 @@ export class LlmGateway {
     const imageBytes = await this.imageProvider.generateImage(
       normalizePrompt(request.prompt),
     );
-    this.imageCache.set(cacheKey, Buffer.from(imageBytes));
+    const imageS3Uri = await this.objectStore.put(
+      `llm-cache/images/${cacheKey}.webp`,
+      Buffer.from(imageBytes),
+    );
+    this.imageCache.set(cacheKey, imageS3Uri);
 
     return {
-      imageBytes,
+      imageS3Uri,
       cacheHit: false,
       cacheKey,
     };

@@ -1,6 +1,5 @@
 import { Context, log } from '@temporalio/activity';
 import { llmGateway } from '../infra/llmGateway';
-import { mockS3 } from '../infra/mockS3';
 import {
   metricsService,
   type MetricsService,
@@ -20,9 +19,9 @@ export interface GenerateImageResult {
 
 /**
  * Generates an article hero image via the LLM gateway.
- * The gateway normalizes + hashes the topic and serves from cache when possible
- * so repeated prompts do not incur another billable provider call.
- * Heartbeats while generating / copying; stores bytes in Mock S3 (claim-check).
+ * The gateway normalizes + hashes the topic, stores WebP in Mock S3
+ * (claim-check), and returns a download URI — from cache when possible so
+ * repeated prompts do not incur another billable provider call.
  */
 export function createGenerateImageActivity(
   metrics: MetricsService = metricsService,
@@ -39,7 +38,7 @@ export function createGenerateImageActivity(
     const ctx = Context.current();
     ctx.heartbeat({ phase: 'gateway', topic: input.topic });
 
-    const { imageBytes, cacheHit, cacheKey } = await llmGateway.generateImage({
+    const { imageS3Uri, cacheHit, cacheKey } = await llmGateway.generateImage({
       prompt: input.topic,
     });
 
@@ -48,27 +47,18 @@ export function createGenerateImageActivity(
       log.info('Image served from LLM gateway cache', {
         articleId: input.articleId,
         cacheKey,
+        imageS3Uri,
       });
     } else {
       metrics.recordImageCall();
-      log.info('Image generated via LLM provider and cached', {
+      log.info('Image generated via LLM provider and stored in S3', {
         articleId: input.articleId,
         cacheKey,
+        imageS3Uri,
       });
     }
 
-    ctx.heartbeat({ phase: 'store', cacheHit, cacheKey });
-
-    const imageS3Uri = await mockS3.put(
-      `articles/${input.tenantId}/${input.articleId}/hero.webp`,
-      Buffer.from(imageBytes),
-    );
-
-    log.info('Article image stored', {
-      articleId: input.articleId,
-      imageS3Uri,
-      cacheHit,
-    });
+    ctx.heartbeat({ phase: 'done', cacheHit, cacheKey, imageS3Uri });
 
     return { imageS3Uri, cacheHit };
   };
